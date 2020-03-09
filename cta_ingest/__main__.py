@@ -26,22 +26,22 @@ def _run_pipeline(cmd1, cmd2):
     p1.stdout.close() # Allow p1 to receive SIGPIPE if p2 exits.
     p2.communicate()
     if p2.returncode != 0:
-        raise Exception('NonZeroReturnCode')
+        raise Exception('NonZeroReturnCode', p2.returncode, cmd1, cmd2)
 
 class NoSuchKeyError(Exception):
     pass
 
 class S3_Wrapper:
-    def __init__(self, endpoint_url, bucket, concurrency=80, chunksize=2**20, progress_interval=0.1):
+    def __init__(self, endpoint_url, bucket):
         self._s3r = boto3.resource('s3', endpoint_url=endpoint_url)
         self._s3c = self._s3r.meta.client
         self._bucket = bucket
         self._s3b = self._s3r.Bucket(self._bucket)
         self._s3b.create()
-        self._tx_config = TransferConfig(max_concurrency=concurrency,
-                                        multipart_threshold=chunksize, 
-                                        multipart_chunksize=chunksize)
-        self._progress_interval=progress_interval
+        self._tx_config = TransferConfig(max_concurrency=os.cpu_count(),
+                                        multipart_threshold=2**20, 
+                                        multipart_chunksize=2**20)
+        self._progress_interval=60
 
     def get_from_json(self, key, **kwargs):
         obj = self._s3r.Object(self._bucket, key)
@@ -145,7 +145,7 @@ class ProgressMeter(object):
                 self._last_update_time = now
                 self._last_update_count = self._count
 
-def disassemble(work_dir, s3w):
+def disassemble(work_dir, part_size, s3w):
     my_state_key = 'disassemble.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     origin = s3w.get_from_json('origin.json', default={})
@@ -163,9 +163,9 @@ def disassemble(work_dir, s3w):
         if chunk_dir.exists():
             _rmdirr(chunk_dir)
         chunk_dir.mkdir(parents=True)
-        zstd_cmd = ['nice', '-n', '19', 'zstd', '--stdout', origin[fname]['path']]
-        split_cmd = ['split', '-b', str(10*10**6), '-', str(chunk_dir) + '/']
-        _run_pipeline(zstd_cmd, split_cmd)
+        zstd_cmd = ['zstd', '--threads=%s' % os.cpu_count()//2, '--stdout', origin[fname]['path']]
+        split_cmd = ['split', '-b', str(part_size), '-', str(chunk_dir) + '/']
+        _run_pipeline(['nice', '-n', '19'] + zstd_cmd, split_cmd)
         my_state[fname] = [str(f) for f in chunk_dir.iterdir()]
         s3w.put_as_json(my_state, my_state_key)
 
@@ -201,7 +201,7 @@ def reassemble(work_dir, dst_dir, s3w):
 
     for origin_path, part_paths in src_state.items():
         output_path = Path(work_dir, Path(origin_path).name)
-        cat_cmd = ['cat'] + part_paths
+        cat_cmd = ['cat'] + sorted(part_paths)
         zstd_cmd = ['zstd', '--quiet', '--force', '--decompress', '-o', str(output_path)]
         _run_pipeline(cat_cmd, zstd_cmd)
         origin_file = origin_state[origin_path]
@@ -223,7 +223,8 @@ def refresh_terminus(root_dir, fn_patterns, my_state_key, s3w):
                 'path': str(fp.resolve()),
                 'size':fp.stat().st_size,
                 'mtime':fp.stat().st_mtime,
-                'atime':fp.stat().st_atime,}
+                'atime':fp.stat().st_atime,
+                'ts':time(),}
     s3w.put_as_json(state, my_state_key)
 
 def show_status(s3w):
@@ -232,8 +233,7 @@ def show_status(s3w):
 
     undelivered = [fn for fn in origin if fn not in target]
     present = [fn for fn in origin if fn in target]
-    mismatched = [fn for fn in present
-                        if origin[fn]['size'] != target[fn]['size']]
+    mismatched = [fn for fn in present if origin[fn]['size'] != target[fn]['size']]
 
     print('Present:', len(present))
     print('Undelivered:', undelivered)
@@ -270,6 +270,7 @@ def main():
                                         max_help_position=max_help_position, width=width)
     def _abs_path(path):
         return Path(path).resolve()
+
     parser = argparse.ArgumentParser(prog='cta-ingest',
             description='Description XXX CTA Ingest',
             formatter_class=arg_formatter(27))
@@ -298,6 +299,8 @@ def main():
     par_adv_disassemble = subpar_adv.add_parser('disassemble', help='disassemble')
     par_adv_disassemble.add_argument('path', metavar='PATH', type=_abs_path,
             help='Destination path')
+    par_adv_disassemble.add_argument('--partsize-mb', metavar='MB', default=100, type=int,
+            help='Part size in MB')
     
     par_adv_upload = subpar_adv.add_parser('upload', help='Upload')
 
@@ -311,7 +314,7 @@ def main():
     par_adv_reassemble.add_argument('dst_path', metavar='PATH', type=_abs_path,
             help='Dst dir')
 
-    s3_grp = parser.add_argument_group('S3 protocol options',
+    s3_grp = parser.add_argument_group('S3 options',
             description='Note that S3 credential arguments are optional. '
                 'See the "Configuring Credentials" section of boto3 library documentation for details.')
     s3_grp.add_argument('-u', '--s3-url', metavar='URL', default='https://rgw.icecube.wisc.edu',
@@ -322,15 +325,18 @@ def main():
             help='S3 access key id override')
     s3_grp.add_argument('-s', dest='secret_access_key',
             help='S3 secret access key override')
+    s3_grp.add_argument('--chunk-size-mb', metavar='MB', default=10, type=int,
+            help='Multipart transfer chunk size in MB')
 
     args = parser.parse_args()
+
+    log_level = (logging.INFO if args.verbose else logging.WARN)
+    logging.basicConfig(level=log_level, format='%(asctime)-23s %(levelname)s %(message)s')
+    logging.info(f'Arguments: {args}')
 
     if args.command is None:
         parser.print_help()
         parser.exit()
-    
-    log_level = (logging.INFO if args.verbose else logging.WARN)
-    logging.basicConfig(level=log_level, format='%(asctime)-23s %(levelname)s %(message)s')
 
     s3w = S3_Wrapper(args.s3_url, args.bucket)
 
@@ -344,7 +350,7 @@ def main():
         elif args.adv_command == 'refresh_target':
             refresh_terminus(args.path, ['.*'], 'target.json', s3w)
         elif args.adv_command == 'disassemble':
-            disassemble(args.path, s3w)
+            disassemble(args.path, args.partsize_mb * 2**20, s3w)
         elif args.adv_command == 'upload':
             upload(s3w)
         elif args.adv_command == 'download':

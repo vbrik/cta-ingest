@@ -3,7 +3,7 @@ root=/tmp/cta-ingest
 
 mc rb --force rgw/cta-dev
 set -e
-rm -rf $root/{disassemble,download,origin,reassemble}
+rm -rf $root/{disassemble,download,origin,reassemble,target}
 mkdir -p $root/origin
 date > $root/origin/_123456_scan.txt
 dd if=/dev/urandom of=$root/origin/_run123456.fits bs=1M count=20

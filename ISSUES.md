@@ -1,1 +1,3 @@
 - Incomplete multipart uploads not cleaned-up
+- Recursive operation not supported
+- In Popen pipelines, failure of the first commands in not detected
