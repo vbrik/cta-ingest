@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import argparse
 import boto3
 from boto3.s3.transfer import TransferConfig
@@ -7,6 +7,7 @@ from functools import partial
 import json
 import logging
 import re
+import signal
 from subprocess import PIPE, Popen
 import sys
 import threading
@@ -145,7 +146,7 @@ class ProgressMeter(object):
                 self._last_update_time = now
                 self._last_update_count = self._count
 
-def disassemble(work_dir, part_size, s3w):
+def disassemble(s3w, work_dir, part_size):
     my_state_key = 'disassemble.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     origin = s3w.get_from_json('origin.json', default={})
@@ -153,23 +154,25 @@ def disassemble(work_dir, part_size, s3w):
     
     my_delivered = set(my_state).intersection(target)
     for fname in my_delivered:
+        logging.info(f'Cleaning up {Path(work_dir, fname)}')
         _rmdirr(Path(work_dir, fname))
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
 
     my_unprocessed = set(origin) - set(my_state) - set(target)
     for fname in my_unprocessed:
+        logging.info(f'Compressing and splitting {fname}')
         chunk_dir = Path(work_dir, fname)
         if chunk_dir.exists():
             _rmdirr(chunk_dir)
         chunk_dir.mkdir(parents=True)
-        zstd_cmd = ['zstd', '--threads=%s' % os.cpu_count()//2, '--stdout', origin[fname]['path']]
+        zstd_cmd = ['zstd', '--threads=%s' % (os.cpu_count()//2,), '--stdout', origin[fname]['path']]
         split_cmd = ['split', '-b', str(part_size), '-', str(chunk_dir) + '/']
         _run_pipeline(['nice', '-n', '19'] + zstd_cmd, split_cmd)
         my_state[fname] = [str(f) for f in chunk_dir.iterdir()]
         s3w.put_as_json(my_state, my_state_key)
 
-def download(work_dir, s3w):
+def download(s3w, work_dir):
     my_state_key = 'download.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     src_state = s3w.get_from_json('upload.json', default={})
@@ -177,6 +180,7 @@ def download(work_dir, s3w):
 
     my_delivered = set(my_state).intersection(target)
     for fname in my_delivered:
+        logging.info(f'Cleaning up {Path(work_dir, fname)}')
         _rmdirr(Path(work_dir, fname))
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
@@ -188,18 +192,20 @@ def download(work_dir, s3w):
         chunks_dir = work_dir / Path(origin_path)
         chunks_dir.mkdir(parents=True, exist_ok=True)
         for part_key in part_keys:
+            logging.info(f'Downloading {origin_path} {part_key}')
             dst_path = str(chunks_dir / Path(part_key).name)
             s3w.download_file(part_key, dst_path)
             my_state[origin_path].append(dst_path)
         s3w.put_as_json(my_state, my_state_key)
 
-def reassemble(work_dir, dst_dir, s3w):
+def reassemble(s3w, work_dir, dst_dir):
     work_dir.mkdir(parents=True, exist_ok=True)
     dst_dir.mkdir(parents=True, exist_ok=True)
     src_state = s3w.get_from_json('download.json')
     origin_state = s3w.get_from_json('origin.json')
 
     for origin_path, part_paths in src_state.items():
+        logging.info(f'Processing {origin_path} from {len(part_paths)} parts')
         output_path = Path(work_dir, Path(origin_path).name)
         cat_cmd = ['cat'] + sorted(part_paths)
         zstd_cmd = ['zstd', '--quiet', '--force', '--decompress', '-o', str(output_path)]
@@ -209,15 +215,18 @@ def reassemble(work_dir, dst_dir, s3w):
         output_path.chmod(0o444)
         target_path = dst_dir/output_path.name
         if target_path.exists():
+            logging.error(f'{target_path} exists')
             continue
         else:
+            logging.info(f'{dst_dir/output_path.name} has been reassembled')
             output_path.rename(dst_dir/output_path.name)
 
-def refresh_terminus(root_dir, fn_patterns, my_state_key, s3w):
+def refresh_terminus(s3w, root_dir, fn_patterns, my_state_key):
     root_dir = root_dir.resolve()
     state = {}
     relevant_files = [fp for fp in root_dir.iterdir()
                 if fp.is_file() and any([re.match(pat, fp.name) for pat in fn_patterns])]
+    logging.info(f'Found {len(relevant_files)} files matching {fn_patterns} in {root_dir}')
     for fp in relevant_files:
         state[str(fp.relative_to(root_dir))] = {
                 'path': str(fp.resolve()),
@@ -247,6 +256,7 @@ def upload(s3w):
 
     my_delivered = set(my_state).intersection(target)
     for fname in my_delivered:
+        logging.info(f'Cleaning up {Path(work_dir, fname)}')
         for key in my_state[fname]:
             s3w.delete_object(key)
         my_state.pop(fname)
@@ -257,8 +267,10 @@ def upload(s3w):
     for fname in my_unprocessed:
         my_state.setdefault(fname, [])
         for part_path in src_state[fname]:
+            logging.info(f'Uploading {part_path}')
             key = 'parts' + part_path
             if key in uploaded_parts:
+                logging.warn(f'Key {key} already uploaded')
                 continue
             s3w.upload_file(part_path, key)
             my_state[fname].append(key)
@@ -276,6 +288,8 @@ def main():
             formatter_class=arg_formatter(27))
     parser.add_argument('-v', '--verbose', action='store_true', default=False,
             help='verbose logging')
+    parser.add_argument('--timeout', metavar='SECONDS', type=int,
+            help='terminate after this amount of time')
 
     subpars = parser.add_subparsers(title='optional commands', dest='command',
             description='The default command is "status". '
@@ -299,7 +313,7 @@ def main():
     par_adv_disassemble = subpar_adv.add_parser('disassemble', help='disassemble')
     par_adv_disassemble.add_argument('path', metavar='PATH', type=_abs_path,
             help='Destination path')
-    par_adv_disassemble.add_argument('--partsize-mb', metavar='MB', default=100, type=int,
+    par_adv_disassemble.add_argument('--part-size-mb', metavar='MB', default=1000, type=int,
             help='Part size in MB')
     
     par_adv_upload = subpar_adv.add_parser('upload', help='Upload')
@@ -331,12 +345,16 @@ def main():
     args = parser.parse_args()
 
     log_level = (logging.INFO if args.verbose else logging.WARN)
-    logging.basicConfig(level=log_level, format='%(asctime)-23s %(levelname)s %(message)s')
+    logging.basicConfig(level=log_level,
+            format='%(levelname)s %(funcName)s() %(message)s')
     logging.info(f'Arguments: {args}')
 
     if args.command is None:
         parser.print_help()
         parser.exit()
+
+    if args.timeout:
+        signal.alarm(args.timeout)
 
     s3w = S3_Wrapper(args.s3_url, args.bucket)
 
@@ -346,17 +364,17 @@ def main():
         if args.adv_command is None:
             parser.exit('Error: Command "adv" requires a subcommand')
         elif args.adv_command == 'refresh_origin':
-            refresh_terminus(args.path, args.filters, 'origin.json', s3w)
+            refresh_terminus(s3w, args.path, args.filters, 'origin.json')
         elif args.adv_command == 'refresh_target':
-            refresh_terminus(args.path, ['.*'], 'target.json', s3w)
+            refresh_terminus(s3w, args.path, ['.*'], 'target.json')
         elif args.adv_command == 'disassemble':
-            disassemble(args.path, args.partsize_mb * 2**20, s3w)
+            disassemble(s3w, args.path, args.part_size_mb * 2**20)
         elif args.adv_command == 'upload':
             upload(s3w)
         elif args.adv_command == 'download':
-            download(args.path, s3w)
+            download(s3w, args.path)
         elif args.adv_command == 'reassemble':
-            reassemble(args.path, args.dst_path, s3w)
+            reassemble(s3w, args.path, args.dst_path)
 
 if __name__ == '__main__':
     sys.exit(main())
