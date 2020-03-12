@@ -2,7 +2,7 @@
 import argparse
 import boto3
 from boto3.s3.transfer import TransferConfig
-from botocore.exceptions import ClientError
+import botocore
 from functools import partial
 import json
 import logging
@@ -34,21 +34,23 @@ class NoSuchKeyError(Exception):
 
 class S3_Wrapper:
     def __init__(self, endpoint_url, bucket):
-        self._s3r = boto3.resource('s3', endpoint_url=endpoint_url)
+        s3_pool_size = 150
+        boto_config = botocore.config.Config(max_pool_connections=s3_pool_size)
+        self._s3r = boto3.resource('s3', endpoint_url=endpoint_url, config=boto_config)
         self._s3c = self._s3r.meta.client
         self._bucket = bucket
         self._s3b = self._s3r.Bucket(self._bucket)
         self._s3b.create()
-        self._tx_config = TransferConfig(max_concurrency=os.cpu_count(),
+        self._tx_config = TransferConfig(max_concurrency=s3_pool_size,
                                         multipart_threshold=2**20, 
                                         multipart_chunksize=2**20)
-        self._progress_interval=60
+        self._progress_interval=120
 
     def get_from_json(self, key, **kwargs):
         obj = self._s3r.Object(self._bucket, key)
         try:
             body = obj.get()['Body'].read()
-        except ClientError as e:
+        except botocore.exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
                 if 'default' in kwargs:
                     return kwargs['default']
@@ -117,7 +119,8 @@ class ProgressMeter(object):
             if self._first_time is None:
                 self._first_time = now
                 self._first_count = num_bytes
-                self._last_update_time = now
+                # trick to display initial stats earlier than self._update_interval
+                self._last_update_time = now - self._update_interval + 10
                 self._last_update_count = num_bytes
             self._count += num_bytes
             t_observed = now - self._first_time
@@ -135,38 +138,44 @@ class ProgressMeter(object):
                 update_delta = self._count - self._last_update_count 
                 update_rate = update_delta / t_since_update # XXX why is this negative sometimes?
                 average_rate = self._count / t_observed
-                t_remaining_avg = (self._size - self._count) / average_rate
                 t_remaining_cur = (self._size - self._count) / update_rate
                 sys.stdout.write(
-                        f'{self._label: <20} {rt(t_observed): <11}  '
+                        f'{self._label: <20} {rt(t_observed): <7}  '
                         f'{rs(self._count): >10} / {rs(self._size)} {percent: 3.0f}%  '
                         f'{rs(update_rate)}/s {rs(average_rate)}/s  '
-                        f'ETA: {rt(t_remaining_cur)} {rt(t_remaining_avg)}\n')
+                        f'ETA: {rt(t_remaining_cur)}\n')
                 sys.stdout.flush()
                 self._last_update_time = now
                 self._last_update_count = self._count
 
-def disassemble(s3w, work_dir, part_size):
+def disassemble(s3w, work_dir, part_size, dry_run):
     my_state_key = 'disassemble.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     origin = s3w.get_from_json('origin.json', default={})
-    target = s3w.get_from_json('target.json', default={})
-    
+    target = s3w.get_from_json('target.json')
+
     my_delivered = set(my_state).intersection(target)
+    my_unprocessed = set(origin) - set(my_state) - set(target) - set(my_delivered)
+
+    if dry_run:
+        logging.info(f'Dry run: would have cleaned-up {my_delivered}')
+        logging.info(f'Dry run: would have processed {my_unprocessed}')
+        return
+
     for fname in my_delivered:
         logging.info(f'Cleaning up {Path(work_dir, fname)}')
         _rmdirr(Path(work_dir, fname))
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
 
-    my_unprocessed = set(origin) - set(my_state) - set(target)
     for fname in my_unprocessed:
         logging.info(f'Compressing and splitting {fname}')
         chunk_dir = Path(work_dir, fname)
         if chunk_dir.exists():
             _rmdirr(chunk_dir)
         chunk_dir.mkdir(parents=True)
-        zstd_cmd = ['zstd', '--threads=%s' % (os.cpu_count()//2,), '--stdout', origin[fname]['path']]
+        # Compressing with --threads=0 seems to use 30-75% of CPU
+        zstd_cmd = ['zstd', '--threads=0', '--stdout', origin[fname]['path']]
         split_cmd = ['split', '-b', str(part_size), '-', str(chunk_dir) + '/']
         _run_pipeline(['nice', '-n', '19'] + zstd_cmd, split_cmd)
         my_state[fname] = [str(f) for f in chunk_dir.iterdir()]
@@ -176,7 +185,7 @@ def download(s3w, work_dir):
     my_state_key = 'download.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     src_state = s3w.get_from_json('upload.json', default={})
-    target = s3w.get_from_json('target.json', default={})
+    target = s3w.get_from_json('target.json')
 
     my_delivered = set(my_state).intersection(target)
     for fname in my_delivered:
@@ -237,8 +246,9 @@ def refresh_terminus(s3w, root_dir, fn_patterns, my_state_key):
     s3w.put_as_json(state, my_state_key)
 
 def show_status(s3w):
-    target = s3w.get_from_json('target.json', default={})
-    origin = s3w.get_from_json('origin.json', default={})
+    # XXX handle missing state exceptions
+    target = s3w.get_from_json('target.json')
+    origin = s3w.get_from_json('origin.json')
 
     undelivered = [fn for fn in origin if fn not in target]
     present = [fn for fn in origin if fn in target]
@@ -248,30 +258,36 @@ def show_status(s3w):
     print('Undelivered:', undelivered)
     print('Mismatched:', mismatched)
 
-def upload(s3w):
+def upload(s3w, dry_run):
     my_state_key = 'upload.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     src_state = s3w.get_from_json('disassemble.json', default={})
-    target = s3w.get_from_json('target.json', default={})
+    target = s3w.get_from_json('target.json')
 
     my_delivered = set(my_state).intersection(target)
+    my_unprocessed = set(src_state) - set(my_state) - set(target) - set(my_delivered)
+
+    if dry_run:
+        logging.info(f'Dry run: would have cleaned-up {my_delivered}')
+        logging.info(f'Dry run: would have processed {my_unprocessed}')
+        return
+
     for fname in my_delivered:
-        logging.info(f'Cleaning up {Path(work_dir, fname)}')
         for key in my_state[fname]:
+            logging.info(f'Cleaning up {key}')
             s3w.delete_object(key)
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
 
     uploaded_parts = s3w.list_keys(prefix='parts')
-    my_unprocessed = set(src_state) - set(target)
     for fname in my_unprocessed:
         my_state.setdefault(fname, [])
         for part_path in src_state[fname]:
-            logging.info(f'Uploading {part_path}')
             key = 'parts' + part_path
             if key in uploaded_parts:
                 logging.warn(f'Key {key} already uploaded')
                 continue
+            logging.info(f'Uploading {part_path} as {key}')
             s3w.upload_file(part_path, key)
             my_state[fname].append(key)
         s3w.put_as_json(my_state, my_state_key)
@@ -294,35 +310,45 @@ def main():
     subpars = parser.add_subparsers(title='optional commands', dest='command',
             description='The default command is "status". '
                 'Use "%(prog)s <command> -h" or similar to get command help.')
-    par_status = subpars.add_parser('status', help='Display status summary')
-    par_adv = subpars.add_parser('adv', help='Run an advanced subcommand')
+    par_status = subpars.add_parser('status', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            help='Display status summary')
+    par_adv = subpars.add_parser('adv', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            help='Run an advanced subcommand')
     subpar_adv = par_adv.add_subparsers(title='advanced subcommands', dest='adv_command')
 
-    par_adv_refresh_origin = subpar_adv.add_parser('refresh_origin', help='XXX',
-                                    formatter_class=arg_formatter(27))
+    par_adv_refresh_origin = subpar_adv.add_parser('refresh_origin', formatter_class=arg_formatter(27),
+            help='XXX')
     par_adv_refresh_origin.add_argument('-f', dest='filters', nargs='*', metavar='RE', default=['.*'],
             help='Filter file name by regular expression')
     par_adv_refresh_origin.add_argument('path', metavar='PATH', type=_abs_path,
             help='Path to monitor')
 
-    par_adv_refresh_target = subpar_adv.add_parser('refresh_target', help='XXX',
-                                    formatter_class=arg_formatter(27))
+    par_adv_refresh_target = subpar_adv.add_parser('refresh_target', formatter_class=arg_formatter(27),
+            help='XXX')
     par_adv_refresh_target.add_argument('path', metavar='PATH', type=_abs_path,
             help='Path to monitor')
 
-    par_adv_disassemble = subpar_adv.add_parser('disassemble', help='disassemble')
+    par_adv_disassemble = subpar_adv.add_parser('disassemble', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            help='disassemble')
     par_adv_disassemble.add_argument('path', metavar='PATH', type=_abs_path,
             help='Destination path')
-    par_adv_disassemble.add_argument('--part-size-mb', metavar='MB', default=1000, type=int,
-            help='Part size in MB')
+    par_adv_disassemble.add_argument('--part-size-gb', metavar='GB', default=10.0, type=float,
+            help='Part size in GB')
+    par_adv_disassemble.add_argument('--dry-run', default=False, action='store_true',
+            help='dry run')
     
-    par_adv_upload = subpar_adv.add_parser('upload', help='Upload')
+    par_adv_upload = subpar_adv.add_parser('upload', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            help='Upload')
+    par_adv_upload.add_argument('--dry-run', default=False, action='store_true',
+            help='dry run')
 
-    par_adv_download = subpar_adv.add_parser('download', help='download')
+    par_adv_download = subpar_adv.add_parser('download', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            help='download')
     par_adv_download.add_argument('path', metavar='PATH', type=_abs_path,
             help='Work dir')
     
-    par_adv_reassemble = subpar_adv.add_parser('reassemble', help='reassemble')
+    par_adv_reassemble = subpar_adv.add_parser('reassemble', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            help='reassemble')
     par_adv_reassemble.add_argument('path', metavar='PATH', type=_abs_path,
             help='Work dir')
     par_adv_reassemble.add_argument('dst_path', metavar='PATH', type=_abs_path,
@@ -339,8 +365,6 @@ def main():
             help='S3 access key id override')
     s3_grp.add_argument('-s', dest='secret_access_key',
             help='S3 secret access key override')
-    s3_grp.add_argument('--chunk-size-mb', metavar='MB', default=10, type=int,
-            help='Multipart transfer chunk size in MB')
 
     args = parser.parse_args()
 
@@ -368,9 +392,9 @@ def main():
         elif args.adv_command == 'refresh_target':
             refresh_terminus(s3w, args.path, ['.*'], 'target.json')
         elif args.adv_command == 'disassemble':
-            disassemble(s3w, args.path, args.part_size_mb * 2**20)
+            disassemble(s3w, args.path, int(args.part_size_gb * 2**30), args.dry_run)
         elif args.adv_command == 'upload':
-            upload(s3w)
+            upload(s3w, args.dry_run)
         elif args.adv_command == 'download':
             download(s3w, args.path)
         elif args.adv_command == 'reassemble':
