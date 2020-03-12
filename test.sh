@@ -30,7 +30,7 @@ section ./cta-ingest.py -v -b cta-dev upload
 section ./cta-ingest.py -v -b cta-dev download $root/download
     tree --noreport $root/download
     mc cat rgw/cta-dev/download.json | jq
-section ./cta-ingest.py -v -b cta-dev reassemble $root/reassemble $root/target
+section ./cta-ingest.py -v -b cta-dev reassemble --work-dir $root/reassemble $root/target
     ls -lh $root/origin
     ls -lh $root/target
 section ./cta-ingest.py -v -b cta-dev refresh_target $root/target

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from argparse import ArgumentDefaultsHelpFormatter
 import boto3
 from boto3.s3.transfer import TransferConfig
 import botocore
@@ -217,7 +218,7 @@ def reassemble(s3w, work_dir, dst_dir):
         logging.info(f'Processing {origin_path} from {len(part_paths)} parts')
         output_path = Path(work_dir, Path(origin_path).name)
         cat_cmd = ['cat'] + sorted(part_paths)
-        zstd_cmd = ['zstd', '--quiet', '--force', '--decompress', '-o', str(output_path)]
+        zstd_cmd = ['pzstd', '--quiet', '--force', '--decompress', '-o', str(output_path)]
         _run_pipeline(cat_cmd, zstd_cmd)
         origin_file = origin_state[origin_path]
         os.utime(output_path, (origin_file['atime'], origin_file['mtime']))
@@ -294,34 +295,34 @@ def upload(s3w, dry_run):
 
 def main():
     def arg_formatter(max_help_position, width=90):
-        return lambda prog: argparse.ArgumentDefaultsHelpFormatter(prog,
+        return lambda prog: ArgumentDefaultsHelpFormatter(prog,
                                         max_help_position=max_help_position, width=width)
     def _abs_path(path):
         return Path(path).resolve()
 
     parser = argparse.ArgumentParser(
-            description='Description XXX CTA Ingest',
+            description='CTA Ingest',
             formatter_class=arg_formatter(27))
     parser.add_argument('-v', '--verbose', action='store_true', default=False,
             help='verbose logging')
 
     subpars = parser.add_subparsers(title='commands', dest='command',
             description='Use "%(prog)s <command> -h" or similar to get command help.')
-    par_status = subpars.add_parser('status', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    par_status = subpars.add_parser('status', formatter_class=ArgumentDefaultsHelpFormatter,
             help='Display status summary')
     par_refresh_origin = subpars.add_parser('refresh_origin', formatter_class=arg_formatter(27),
-            help='XXX')
+            help='Update file list of the origin directory')
     par_refresh_origin.add_argument('-f', dest='filters', nargs='*', metavar='RE', default=['.*'],
             help='Filter file name by regular expression')
     par_refresh_origin.add_argument('path', metavar='PATH', type=_abs_path,
             help='Path to monitor')
 
     par_refresh_target = subpars.add_parser('refresh_target', formatter_class=arg_formatter(27),
-            help='XXX')
+            help='Update file list of the target directory')
     par_refresh_target.add_argument('path', metavar='PATH', type=_abs_path,
             help='Path to monitor')
 
-    par_disassemble = subpars.add_parser('disassemble', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    par_disassemble = subpars.add_parser('disassemble', formatter_class=ArgumentDefaultsHelpFormatter,
             help='disassemble')
     par_disassemble.add_argument('path', metavar='PATH', type=_abs_path,
             help='Destination path')
@@ -330,21 +331,21 @@ def main():
     par_disassemble.add_argument('--dry-run', default=False, action='store_true',
             help='dry run')
     
-    par_upload = subpars.add_parser('upload', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    par_upload = subpars.add_parser('upload', formatter_class=ArgumentDefaultsHelpFormatter,
             help='Upload')
     par_upload.add_argument('--dry-run', default=False, action='store_true',
             help='dry run')
     par_upload.add_argument('--timeout', metavar='SECONDS', type=int,
             help='terminate after this amount of time')
 
-    par_download = subpars.add_parser('download', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    par_download = subpars.add_parser('download', formatter_class=ArgumentDefaultsHelpFormatter,
             help='download')
     par_download.add_argument('path', metavar='PATH', type=_abs_path,
             help='Work dir')
     
-    par_reassemble = subpars.add_parser('reassemble', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    par_reassemble = subpars.add_parser('reassemble', formatter_class=ArgumentDefaultsHelpFormatter,
             help='reassemble')
-    par_reassemble.add_argument('path', metavar='PATH', type=_abs_path,
+    par_reassemble.add_argument('--work-dir', metavar='PATH', type=_abs_path, required=True,
             help='Work dir')
     par_reassemble.add_argument('dst_path', metavar='PATH', type=_abs_path,
             help='Dst dir')
@@ -366,7 +367,11 @@ def main():
     log_level = (logging.INFO if args.verbose else logging.WARN)
     logging.basicConfig(level=log_level,
             format='%(levelname)s %(funcName)s() %(message)s')
-    logging.info(f'Arguments: {args}')
+
+    args_dict = args.__dict__.copy()
+    args_dict.pop('access_key_id')
+    args_dict.pop('secret_access_key')
+    logging.info(f'Arguments (redacted): {args_dict}')
 
     if args.command is None:
         parser.print_help()
@@ -389,7 +394,7 @@ def main():
     elif args.command == 'download':
         download(s3w, args.path)
     elif args.command == 'reassemble':
-        reassemble(s3w, args.path, args.dst_path)
+        reassemble(s3w, args.work_dir, args.dst_path)
 
 if __name__ == '__main__':
     sys.exit(main())
