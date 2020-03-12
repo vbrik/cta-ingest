@@ -299,59 +299,54 @@ def main():
     def _abs_path(path):
         return Path(path).resolve()
 
-    parser = argparse.ArgumentParser(prog='cta-ingest',
+    parser = argparse.ArgumentParser(
             description='Description XXX CTA Ingest',
             formatter_class=arg_formatter(27))
     parser.add_argument('-v', '--verbose', action='store_true', default=False,
             help='verbose logging')
-    parser.add_argument('--timeout', metavar='SECONDS', type=int,
-            help='terminate after this amount of time')
 
-    subpars = parser.add_subparsers(title='optional commands', dest='command',
-            description='The default command is "status". '
-                'Use "%(prog)s <command> -h" or similar to get command help.')
+    subpars = parser.add_subparsers(title='commands', dest='command',
+            description='Use "%(prog)s <command> -h" or similar to get command help.')
     par_status = subpars.add_parser('status', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
             help='Display status summary')
-    par_adv = subpars.add_parser('adv', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-            help='Run an advanced subcommand')
-    subpar_adv = par_adv.add_subparsers(title='advanced subcommands', dest='adv_command')
-
-    par_adv_refresh_origin = subpar_adv.add_parser('refresh_origin', formatter_class=arg_formatter(27),
+    par_refresh_origin = subpars.add_parser('refresh_origin', formatter_class=arg_formatter(27),
             help='XXX')
-    par_adv_refresh_origin.add_argument('-f', dest='filters', nargs='*', metavar='RE', default=['.*'],
+    par_refresh_origin.add_argument('-f', dest='filters', nargs='*', metavar='RE', default=['.*'],
             help='Filter file name by regular expression')
-    par_adv_refresh_origin.add_argument('path', metavar='PATH', type=_abs_path,
+    par_refresh_origin.add_argument('path', metavar='PATH', type=_abs_path,
             help='Path to monitor')
 
-    par_adv_refresh_target = subpar_adv.add_parser('refresh_target', formatter_class=arg_formatter(27),
+    par_refresh_target = subpars.add_parser('refresh_target', formatter_class=arg_formatter(27),
             help='XXX')
-    par_adv_refresh_target.add_argument('path', metavar='PATH', type=_abs_path,
+    par_refresh_target.add_argument('path', metavar='PATH', type=_abs_path,
             help='Path to monitor')
 
-    par_adv_disassemble = subpar_adv.add_parser('disassemble', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    par_disassemble = subpars.add_parser('disassemble', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
             help='disassemble')
-    par_adv_disassemble.add_argument('path', metavar='PATH', type=_abs_path,
+    par_disassemble.add_argument('path', metavar='PATH', type=_abs_path,
             help='Destination path')
-    par_adv_disassemble.add_argument('--part-size-gb', metavar='GB', default=10.0, type=float,
+    par_disassemble.add_argument('--part-size-gb', metavar='GB', default=10.0, type=float,
             help='Part size in GB')
-    par_adv_disassemble.add_argument('--dry-run', default=False, action='store_true',
+    par_disassemble.add_argument('--dry-run', default=False, action='store_true',
             help='dry run')
     
-    par_adv_upload = subpar_adv.add_parser('upload', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    par_upload = subpars.add_parser('upload', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
             help='Upload')
-    par_adv_upload.add_argument('--dry-run', default=False, action='store_true',
+    par_upload.add_argument('--dry-run', default=False, action='store_true',
             help='dry run')
+    par_upload.add_argument('--timeout', metavar='SECONDS', type=int,
+            help='terminate after this amount of time')
 
-    par_adv_download = subpar_adv.add_parser('download', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    par_download = subpars.add_parser('download', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
             help='download')
-    par_adv_download.add_argument('path', metavar='PATH', type=_abs_path,
+    par_download.add_argument('path', metavar='PATH', type=_abs_path,
             help='Work dir')
     
-    par_adv_reassemble = subpar_adv.add_parser('reassemble', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    par_reassemble = subpars.add_parser('reassemble', formatter_class=argparse.ArgumentDefaultsHelpFormatter,
             help='reassemble')
-    par_adv_reassemble.add_argument('path', metavar='PATH', type=_abs_path,
+    par_reassemble.add_argument('path', metavar='PATH', type=_abs_path,
             help='Work dir')
-    par_adv_reassemble.add_argument('dst_path', metavar='PATH', type=_abs_path,
+    par_reassemble.add_argument('dst_path', metavar='PATH', type=_abs_path,
             help='Dst dir')
 
     s3_grp = parser.add_argument_group('S3 options',
@@ -377,28 +372,24 @@ def main():
         parser.print_help()
         parser.exit()
 
-    if args.timeout:
-        signal.alarm(args.timeout)
-
     s3w = S3_Wrapper(args.s3_url, args.bucket)
 
     if args.command == 'status':
         show_status(s3w)
-    elif args.command == 'adv':
-        if args.adv_command is None:
-            parser.exit('Error: Command "adv" requires a subcommand')
-        elif args.adv_command == 'refresh_origin':
-            refresh_terminus(s3w, args.path, args.filters, 'origin.json')
-        elif args.adv_command == 'refresh_target':
-            refresh_terminus(s3w, args.path, ['.*'], 'target.json')
-        elif args.adv_command == 'disassemble':
-            disassemble(s3w, args.path, int(args.part_size_gb * 2**30), args.dry_run)
-        elif args.adv_command == 'upload':
-            upload(s3w, args.dry_run)
-        elif args.adv_command == 'download':
-            download(s3w, args.path)
-        elif args.adv_command == 'reassemble':
-            reassemble(s3w, args.path, args.dst_path)
+    elif args.command == 'refresh_origin':
+        refresh_terminus(s3w, args.path, args.filters, 'origin.json')
+    elif args.command == 'refresh_target':
+        refresh_terminus(s3w, args.path, ['.*'], 'target.json')
+    elif args.command == 'disassemble':
+        disassemble(s3w, args.path, int(args.part_size_gb * 2**30), args.dry_run)
+    elif args.command == 'upload':
+        if args.timeout:
+            signal.alarm(args.timeout)
+        upload(s3w, args.dry_run)
+    elif args.command == 'download':
+        download(s3w, args.path)
+    elif args.command == 'reassemble':
+        reassemble(s3w, args.path, args.dst_path)
 
 if __name__ == '__main__':
     sys.exit(main())
