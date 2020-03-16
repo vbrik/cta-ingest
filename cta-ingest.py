@@ -231,11 +231,11 @@ def reassemble(s3w, work_dir, dst_dir):
             output_path.rename(dst_dir/output_path.name)
             logging.info(f'{dst_dir/output_path.name} arrived at its final destination')
 
-def refresh_terminus(s3w, root_dir, fn_patterns, my_state_key):
+def refresh_terminus(s3w, root_dir, excludes, my_state_key):
     root_dir = root_dir.resolve()
     state = {}
     relevant_files = [fp for fp in root_dir.iterdir()
-                if fp.is_file() and any([re.match(pat, fp.name) for pat in fn_patterns])]
+                if fp.is_file() and not sum(fp.name.startswith(pref) for pref in excludes)]
     for fp in relevant_files:
         state[str(fp.relative_to(root_dir))] = {
                 'path': str(fp.resolve()),
@@ -309,8 +309,8 @@ def main():
             help='display status summary')
     par_refresh_origin = subpars.add_parser('refresh_origin', formatter_class=__formatter(27),
             help='update the list of files currently in the origin directory')
-    par_refresh_origin.add_argument('-f', dest='filters', nargs='*', metavar='RE', default=['.*'],
-            help='filter file name by regular expression')
+    par_refresh_origin.add_argument('-x', dest='excludes', nargs='*', metavar='PREF', default=[],
+            help='exclude files whose names start with PREF')
     par_refresh_origin.add_argument('path', metavar='ORIGIN_PATH', type=__abs_path,
             help='path to monitor')
 
@@ -379,7 +379,7 @@ def main():
     if args.command == 'status':
         show_status(s3w)
     elif args.command == 'refresh_origin':
-        refresh_terminus(s3w, args.path, args.filters, 'origin.json')
+        refresh_terminus(s3w, args.path, args.excludes, 'origin.json')
     elif args.command == 'refresh_target':
         refresh_terminus(s3w, args.path, ['.*'], 'target.json')
     elif args.command == 'disassemble':
