@@ -17,7 +17,7 @@ from pprint import pprint
 from pathlib import Path
 from time import time
 
-def _rmdirr(path):
+def _rmdir_recursive(path):
     for fp in path.iterdir():
         fp.unlink()
     path.rmdir()
@@ -165,7 +165,7 @@ def disassemble(s3w, work_dir, part_size, dry_run):
 
     for fname in my_delivered:
         logging.info(f'Cleaning up {Path(work_dir, fname)}')
-        _rmdirr(Path(work_dir, fname))
+        _rmdir_r(Path(work_dir, fname))
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
 
@@ -173,7 +173,7 @@ def disassemble(s3w, work_dir, part_size, dry_run):
         logging.info(f'Compressing and splitting {fname}')
         chunk_dir = Path(work_dir, fname)
         if chunk_dir.exists():
-            _rmdirr(chunk_dir)
+            _rmdir_recursive(chunk_dir)
         chunk_dir.mkdir(parents=True)
         # Compressing with --threads=0 seems to use 30-75% of CPU
         zstd_cmd = ['zstd', '--threads=0', '--stdout', origin[fname]['path']]
@@ -191,7 +191,7 @@ def download(s3w, work_dir):
     my_delivered = set(my_state).intersection(target)
     for fname in my_delivered:
         logging.info(f'Cleaning up {Path(work_dir, fname)}')
-        _rmdirr(Path(work_dir, fname))
+        _rmdir_recursive(Path(work_dir, fname))
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
 
@@ -211,7 +211,7 @@ def download(s3w, work_dir):
 def reassemble(s3w, work_dir, dst_dir):
     work_dir.mkdir(parents=True, exist_ok=True)
     dst_dir.mkdir(parents=True, exist_ok=True)
-    src_state = s3w.get_from_json('download.json')
+    src_state = s3w.get_from_json('download.json', default={})
     origin_state = s3w.get_from_json('origin.json')
 
     for origin_path, part_paths in src_state.items():
@@ -225,18 +225,17 @@ def reassemble(s3w, work_dir, dst_dir):
         output_path.chmod(0o444)
         target_path = dst_dir/output_path.name
         if target_path.exists():
-            logging.error(f'{target_path} exists')
+            logging.info(f'{target_path} exists')
             continue
         else:
-            logging.info(f'{dst_dir/output_path.name} has been reassembled')
             output_path.rename(dst_dir/output_path.name)
+            logging.info(f'{dst_dir/output_path.name} arrived at its final destination')
 
 def refresh_terminus(s3w, root_dir, fn_patterns, my_state_key):
     root_dir = root_dir.resolve()
     state = {}
     relevant_files = [fp for fp in root_dir.iterdir()
                 if fp.is_file() and any([re.match(pat, fp.name) for pat in fn_patterns])]
-    logging.info(f'Found {len(relevant_files)} files matching {fn_patterns} in {root_dir}')
     for fp in relevant_files:
         state[str(fp.relative_to(root_dir))] = {
                 'path': str(fp.resolve()),
@@ -286,7 +285,7 @@ def upload(s3w, dry_run):
         for part_path in src_state[fname]:
             key = 'parts' + part_path
             if key in uploaded_parts:
-                logging.warn(f'Key {key} already uploaded')
+                logging.info(f'Key {key} already uploaded')
                 continue
             logging.info(f'Uploading {part_path} as {key}')
             s3w.upload_file(part_path, key)
@@ -294,61 +293,59 @@ def upload(s3w, dry_run):
         s3w.put_as_json(my_state, my_state_key)
 
 def main():
-    def arg_formatter(max_help_position, width=90):
+    def __formatter(max_help_position, width=90):
         return lambda prog: ArgumentDefaultsHelpFormatter(prog,
                                         max_help_position=max_help_position, width=width)
-    def _abs_path(path):
+    def __abs_path(path):
         return Path(path).resolve()
 
     parser = argparse.ArgumentParser(
-            description='CTA Ingest',
-            formatter_class=arg_formatter(27))
-    parser.add_argument('-v', '--verbose', action='store_true', default=False,
-            help='verbose logging')
+            description='CTA Ingest. https://github.com/vbrik/cta-ingest',
+            formatter_class=__formatter(27))
 
     subpars = parser.add_subparsers(title='commands', dest='command',
             description='Use "%(prog)s <command> -h" or similar to get command help.')
     par_status = subpars.add_parser('status', formatter_class=ArgumentDefaultsHelpFormatter,
-            help='Display status summary')
-    par_refresh_origin = subpars.add_parser('refresh_origin', formatter_class=arg_formatter(27),
-            help='Update file list of the origin directory')
+            help='display status summary')
+    par_refresh_origin = subpars.add_parser('refresh_origin', formatter_class=__formatter(27),
+            help='update the list of files currently in the origin directory')
     par_refresh_origin.add_argument('-f', dest='filters', nargs='*', metavar='RE', default=['.*'],
-            help='Filter file name by regular expression')
-    par_refresh_origin.add_argument('path', metavar='PATH', type=_abs_path,
-            help='Path to monitor')
+            help='filter file name by regular expression')
+    par_refresh_origin.add_argument('path', metavar='ORIGIN_PATH', type=__abs_path,
+            help='path to monitor')
 
-    par_refresh_target = subpars.add_parser('refresh_target', formatter_class=arg_formatter(27),
-            help='Update file list of the target directory')
-    par_refresh_target.add_argument('path', metavar='PATH', type=_abs_path,
-            help='Path to monitor')
+    par_refresh_target = subpars.add_parser('refresh_target', formatter_class=__formatter(27),
+            help='update the list of files currently in the target directory')
+    par_refresh_target.add_argument('path', metavar='PATH', type=__abs_path,
+            help='path to monitor')
 
     par_disassemble = subpars.add_parser('disassemble', formatter_class=ArgumentDefaultsHelpFormatter,
-            help='disassemble')
-    par_disassemble.add_argument('path', metavar='PATH', type=_abs_path,
-            help='Destination path')
+            help='prepare origin files for uploading to the S3 bucket')
+    par_disassemble.add_argument('path', metavar='PATH', type=__abs_path,
+            help='directory where to store file parts')
     par_disassemble.add_argument('--part-size-gb', metavar='GB', default=10.0, type=float,
-            help='Part size in GB')
+            help='part size in GB')
     par_disassemble.add_argument('--dry-run', default=False, action='store_true',
             help='dry run')
     
     par_upload = subpars.add_parser('upload', formatter_class=ArgumentDefaultsHelpFormatter,
-            help='Upload')
-    par_upload.add_argument('--dry-run', default=False, action='store_true',
-            help='dry run')
+            help='upload disassembled files to the S3 bucket')
     par_upload.add_argument('--timeout', metavar='SECONDS', type=int,
             help='terminate after this amount of time')
+    par_upload.add_argument('--dry-run', default=False, action='store_true',
+            help='dry run')
 
     par_download = subpars.add_parser('download', formatter_class=ArgumentDefaultsHelpFormatter,
-            help='download')
-    par_download.add_argument('path', metavar='PATH', type=_abs_path,
-            help='Work dir')
+            help='download file parts from S3')
+    par_download.add_argument('path', metavar='PATH', type=__abs_path,
+            help='directory where to store file parts')
     
     par_reassemble = subpars.add_parser('reassemble', formatter_class=ArgumentDefaultsHelpFormatter,
-            help='reassemble')
-    par_reassemble.add_argument('--work-dir', metavar='PATH', type=_abs_path, required=True,
-            help='Work dir')
-    par_reassemble.add_argument('dst_path', metavar='PATH', type=_abs_path,
-            help='Dst dir')
+            help='reassemble files from parts')
+    par_reassemble.add_argument('dst_path', metavar='TARGET_PATH', type=__abs_path,
+            help='final destination directory')
+    par_reassemble.add_argument('--work-dir', metavar='WORK_PATH', type=__abs_path, required=True,
+            help='temporary storage directory in the same file system as TARGET_PATH')
 
     s3_grp = parser.add_argument_group('S3 options',
             description='Note that S3 credential arguments are optional. '
@@ -364,14 +361,14 @@ def main():
 
     args = parser.parse_args()
 
-    log_level = (logging.INFO if args.verbose else logging.WARN)
-    logging.basicConfig(level=log_level,
-            format='%(levelname)s %(funcName)s() %(message)s')
+    boto3.set_stream_logger('botocore.credentials', level=logging.WARNING)
+    logging.basicConfig(level=logging.INFO,
+            format='%(asctime)-23s %(levelname)s %(message)s')
 
     args_dict = args.__dict__.copy()
     args_dict.pop('access_key_id')
     args_dict.pop('secret_access_key')
-    logging.info(f'Arguments (redacted): {args_dict}')
+    logging.debug(f'Arguments (redacted): {args_dict}')
 
     if args.command is None:
         parser.print_help()
@@ -398,4 +395,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-
