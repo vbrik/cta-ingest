@@ -182,20 +182,30 @@ def disassemble(s3w, work_dir, part_size, dry_run):
         my_state[fname] = [str(f) for f in chunk_dir.iterdir()]
         s3w.put_as_json(my_state, my_state_key)
 
-def download(s3w, work_dir):
+# Note that we take a bit of a shortcut here and just re-download everything
+# that is not at the destination yet. This is wasteful especially in partial
+# upload situations. Part of the problem is that downloads are not atomic.
+# One solution is to download to a temporary name and then do a move (TODO).
+def download(s3w, work_dir, dry_run):
     my_state_key = 'download.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     src_state = s3w.get_from_json('upload.json', default={})
     target = s3w.get_from_json('target.json')
 
     my_delivered = set(my_state).intersection(target)
+    my_unprocessed = set(src_state) - set(target)
+
+    if dry_run:
+        logging.info(f'Dry run: would have cleaned-up {my_delivered}')
+        logging.info(f'Dry run: would have dowloaded {my_unprocessed}')
+        return
+
     for fname in my_delivered:
         logging.info(f'Cleaning up {Path(work_dir, fname)}')
         _rmdir_recursive(Path(work_dir, fname))
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
 
-    my_unprocessed = set(src_state) - set(my_state) - set(target)
     for origin_path in my_unprocessed:
         part_keys = src_state[origin_path]
         my_state.setdefault(origin_path, [])
@@ -352,6 +362,8 @@ def main():
             help='download file parts from S3')
     par_download.add_argument('path', metavar='PATH', type=__abs_path,
             help='directory where to store file parts')
+    par_download.add_argument('--dry-run', default=False, action='store_true',
+            help='dry run')
     
     par_reassemble = subpars.add_parser('reassemble', formatter_class=ArgumentDefaultsHelpFormatter,
             help='reassemble files from parts')
@@ -402,7 +414,7 @@ def main():
             signal.alarm(args.timeout)
         upload(s3w, args.dry_run)
     elif args.command == 'download':
-        download(s3w, args.path)
+        download(s3w, args.path, args.dry_run)
     elif args.command == 'reassemble':
         reassemble(s3w, args.work_dir, args.dst_path)
 
