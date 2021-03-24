@@ -270,11 +270,11 @@ def upload(s3w, dry_run):
     target = s3w.get_from_json('target.json')
 
     my_delivered = set(my_state).intersection(target)
-    my_unprocessed = set(src_state) - set(my_state) - set(target) - set(my_delivered)
+    my_undelivered = set(src_state) - my_delivered - set(target) - set(my_delivered)
 
     if dry_run:
         logging.info(f'Dry run: would have cleaned-up {my_delivered}')
-        logging.info(f'Dry run: would have processed {my_unprocessed}')
+        logging.info(f'Dry run: would have processed {my_undelivered}')
         return
 
     for fname in my_delivered:
@@ -285,7 +285,7 @@ def upload(s3w, dry_run):
         s3w.put_as_json(my_state, my_state_key)
 
     uploaded_parts = s3w.list_keys(prefix='parts')
-    for fname in my_unprocessed:
+    for fname in my_undelivered:
         my_state.setdefault(fname, [])
         for part_path in src_state[fname]:
             key = 'parts' + part_path
