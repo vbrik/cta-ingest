@@ -219,7 +219,12 @@ def reassemble(s3w, work_dir, dst_dir):
         output_path = Path(work_dir, Path(origin_path).name)
         cat_cmd = ['cat'] + sorted(part_paths)
         zstd_cmd = ['pzstd', '--quiet', '--force', '--decompress', '-o', str(output_path)]
-        _run_pipeline(cat_cmd, zstd_cmd)
+        try:
+            _run_pipeline(cat_cmd, zstd_cmd)
+        except Exception as e:
+            logging.warn(f'Failed to reassemble {origin_path}')
+            logging.warn(f'{e}')
+            continue
         origin_file = origin_state[origin_path]
         os.utime(output_path, (origin_file['atime'], origin_file['mtime']))
         output_path.chmod(0o444)
