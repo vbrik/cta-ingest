@@ -271,10 +271,15 @@ def upload(s3w, dry_run):
 
     my_delivered = set(my_state).intersection(target)
     my_undelivered = set(src_state) - my_delivered - set(target) - set(my_delivered)
+    uploaded_parts = set(s3w.list_keys(prefix='parts'))
+    partially_uploaded = {fname for fname,parts in my_state.items()
+                            if uploaded_parts.intersection(parts)}
+    unuploaded = my_undelivered - partially_uploaded
 
     if dry_run:
         logging.info(f'Dry run: would have cleaned-up {my_delivered}')
-        logging.info(f'Dry run: would have processed {my_undelivered}')
+        logging.info(f'Dry run: would have started uploading {unuploaded}')
+        logging.info(f'Dry run: would have resumed uploading {partially_uploaded}')
         return
 
     for fname in my_delivered:
@@ -284,18 +289,18 @@ def upload(s3w, dry_run):
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
 
-    uploaded_parts = s3w.list_keys(prefix='parts')
     for fname in my_undelivered:
         my_state.setdefault(fname, [])
         for part_path in src_state[fname]:
             key = 'parts' + part_path
             if key in uploaded_parts:
                 logging.info(f'Key {key} already uploaded')
+                s3w.put_as_json(my_state, my_state_key)
                 continue
             logging.info(f'Uploading {part_path} as {key}')
             s3w.upload_file(part_path, key)
             my_state[fname].append(key)
-        s3w.put_as_json(my_state, my_state_key)
+            s3w.put_as_json(my_state, my_state_key)
 
 def main():
     def __formatter(max_help_position, width=90):
