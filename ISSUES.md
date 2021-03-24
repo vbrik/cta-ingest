@@ -1,4 +1,3 @@
 - In Popen pipelines, failure of the first commands in not detected
 - Incomplete multipart uploads not cleaned-up
 - Directory transfers not supported
-- Download function always downloads everything from proxy storage. This is especially wasteful in cases of partial uploads.

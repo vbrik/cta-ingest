@@ -182,10 +182,6 @@ def disassemble(s3w, work_dir, part_size, dry_run):
         my_state[fname] = [str(f) for f in chunk_dir.iterdir()]
         s3w.put_as_json(my_state, my_state_key)
 
-# Note that we take a bit of a shortcut here and just re-download everything
-# that is not at the destination yet. This is wasteful especially in partial
-# upload situations. Part of the problem is that downloads are not atomic.
-# One solution is to download to a temporary name and then do a move (TODO).
 def download(s3w, work_dir, dry_run):
     my_state_key = 'download.json'
     my_state = s3w.get_from_json(my_state_key, default={})
@@ -214,9 +210,13 @@ def download(s3w, work_dir, dry_run):
         for part_key in part_keys:
             logging.info(f'Downloading {origin_path} {part_key}')
             dst_path = str(chunks_dir / Path(part_key).name)
-            s3w.download_file(part_key, dst_path)
-            my_state[origin_path].append(dst_path)
-        s3w.put_as_json(my_state, my_state_key)
+            if dst_path in my_state[origin_path]:
+                logging.warn(f'{part_key} already downloaded at {dst_path}')
+                continue
+            else:
+                s3w.download_file(part_key, dst_path)
+                my_state[origin_path].append(dst_path)
+                s3w.put_as_json(my_state, my_state_key)
 
 def reassemble(s3w, work_dir, dst_dir):
     work_dir.mkdir(parents=True, exist_ok=True)
