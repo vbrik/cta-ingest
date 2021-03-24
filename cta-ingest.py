@@ -270,11 +270,11 @@ def upload(s3w, dry_run):
     target = s3w.get_from_json('target.json')
 
     my_delivered = set(my_state).intersection(target)
-    my_undelivered = set(src_state) - my_delivered - set(target) - set(my_delivered)
+    my_unprocessed = set(src_state) - my_delivered - set(target)
     uploaded_parts = set(s3w.list_keys(prefix='parts'))
     partially_uploaded = {fname for fname,parts in my_state.items()
                             if uploaded_parts.intersection(parts)}
-    unuploaded = my_undelivered - partially_uploaded
+    unuploaded = my_unprocessed - partially_uploaded
 
     if dry_run:
         logging.info(f'Dry run: would have cleaned-up {my_delivered}')
@@ -289,16 +289,19 @@ def upload(s3w, dry_run):
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
 
-    for fname in my_undelivered:
+    for fname in my_unprocessed:
         my_state.setdefault(fname, [])
         for part_path in src_state[fname]:
             key = 'parts' + part_path
             if key in uploaded_parts:
                 logging.info(f'Key {key} already uploaded')
-                s3w.put_as_json(my_state, my_state_key)
-                continue
-            logging.info(f'Uploading {part_path} as {key}')
-            s3w.upload_file(part_path, key)
+                if key not in my_state[fname]:
+                    logging.warn(f'Uploaded key {key} wasn\'t in {my_state_key}')
+                else:
+                    continue # key uploaded and in my_state
+            else:
+                logging.info(f'Uploading {part_path} as {key}')
+                s3w.upload_file(part_path, key)
             my_state[fname].append(key)
             s3w.put_as_json(my_state, my_state_key)
 
