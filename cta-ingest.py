@@ -211,7 +211,7 @@ def download(s3w, work_dir, dry_run):
             logging.info(f'Downloading {origin_path} {part_key}')
             dst_path = str(chunks_dir / Path(part_key).name)
             if dst_path in my_state[origin_path]:
-                logging.warn(f'{part_key} already downloaded at {dst_path}')
+                logging.warning(f'{part_key} already downloaded at {dst_path}')
                 continue
             else:
                 s3w.download_file(part_key, dst_path)
@@ -232,8 +232,8 @@ def reassemble(s3w, work_dir, dst_dir):
         try:
             _run_pipeline(cat_cmd, zstd_cmd)
         except Exception as e:
-            logging.warn(f'Failed to reassemble {origin_path}')
-            logging.warn(f'{e}')
+            logging.warning(f'Failed to reassemble {origin_path}')
+            logging.warning(f'{e}')
             continue
         origin_file = origin_state[origin_path]
         os.utime(output_path, (origin_file['atime'], origin_file['mtime']))
@@ -306,7 +306,7 @@ def upload(s3w, dry_run):
             if key in uploaded_parts:
                 logging.info(f'Key {key} already uploaded')
                 if key not in my_state[fname]:
-                    logging.warn(f'Uploaded key {key} wasn\'t in {my_state_key}')
+                    logging.warning(f'Uploaded key {key} wasn\'t in {my_state_key}')
                 else:
                     continue # key uploaded and in my_state
             else:
