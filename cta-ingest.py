@@ -170,7 +170,7 @@ def disassemble(s3w, work_dir, part_size, dry_run):
         s3w.put_as_json(my_state, my_state_key)
 
     for fname in my_unprocessed:
-        logging.info(f'Compressing and splitting {fname}')
+        logging.debug(f'Compressing and splitting {fname}')
         chunk_dir = Path(work_dir, fname)
         if chunk_dir.exists():
             _rmdir_recursive(chunk_dir)
@@ -208,7 +208,7 @@ def download(s3w, work_dir, dry_run):
         chunks_dir = work_dir / Path(origin_path)
         chunks_dir.mkdir(parents=True, exist_ok=True)
         for part_key in part_keys:
-            logging.info(f'Downloading {origin_path} {part_key}')
+            logging.debug(f'Downloading {origin_path} {part_key}')
             dst_path = str(chunks_dir / Path(part_key).name)
             if dst_path in my_state[origin_path]:
                 logging.warning(f'{part_key} already downloaded at {dst_path}')
@@ -225,9 +225,9 @@ def reassemble(s3w, work_dir, dst_dir):
     origin_state = s3w.get_from_json('origin.json')
 
     for origin_path, part_paths in src_state.items():
-        logging.info(f'Processing {origin_path} from {len(part_paths)} parts')
+        logging.debug(f'Processing {origin_path} from {len(part_paths)} parts')
         if not part_paths:
-            logging.warning(f'Skipping {origin_path} no parts are available')
+            logging.warning(f'Skipping {origin_path} because no parts are available')
             continue
         output_path = Path(work_dir, Path(origin_path).name)
         cat_cmd = ['cat'] + sorted(part_paths)
@@ -243,11 +243,11 @@ def reassemble(s3w, work_dir, dst_dir):
         output_path.chmod(0o444)
         target_path = dst_dir/output_path.name
         if target_path.exists():
-            logging.info(f'{target_path} exists')
+            logging.error(f'{target_path} exists')
             continue
         else:
             output_path.rename(dst_dir/output_path.name)
-            logging.info(f'{dst_dir/output_path.name} arrived at its final destination')
+            logging.debug(f'{dst_dir/output_path.name} arrived at its final destination')
 
 def refresh_terminus(s3w, root_dir, excludes, my_state_key):
     root_dir = root_dir.resolve()
@@ -307,13 +307,13 @@ def upload(s3w, dry_run):
         for part_path in src_state[fname]:
             key = 'parts' + part_path
             if key in uploaded_parts:
-                logging.info(f'Key {key} already uploaded')
+                logging.warning(f'Key {key} already uploaded')
                 if key not in my_state[fname]:
                     logging.warning(f'Uploaded key {key} wasn\'t in {my_state_key}')
                 else:
                     continue # key uploaded and in my_state
             else:
-                logging.info(f'Uploading {part_path} as {key}')
+                logging.debug(f'Uploading {part_path} as {key}')
                 s3w.upload_file(part_path, key)
             my_state[fname].append(key)
             s3w.put_as_json(my_state, my_state_key)
@@ -329,6 +329,9 @@ def main():
             description='CTA Ingest. https://github.com/vbrik/cta-ingest',
             formatter_class=__formatter(27))
 
+    parser.add_argument('--debug', action='store_true', default=False,
+            help='Enable debugging')
+    
     subpars = parser.add_subparsers(title='commands', dest='command',
             description='Use "%(prog)s <command> -h" or similar to get command help.')
     par_status = subpars.add_parser('status', formatter_class=ArgumentDefaultsHelpFormatter,
@@ -390,7 +393,7 @@ def main():
     args = parser.parse_args()
 
     boto3.set_stream_logger('botocore.credentials', level=logging.WARNING)
-    logging.basicConfig(level=logging.INFO,
+    logging.basicConfig(level=(logging.DEBUG if args.debug else logging.INFO),
             format='%(asctime)-23s %(levelname)s %(message)s')
 
     args_dict = args.__dict__.copy()
