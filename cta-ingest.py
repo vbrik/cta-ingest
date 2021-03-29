@@ -226,6 +226,9 @@ def reassemble(s3w, work_dir, dst_dir):
 
     for origin_path, part_paths in src_state.items():
         logging.info(f'Processing {origin_path} from {len(part_paths)} parts')
+        if not part_paths:
+            logging.warning(f'Skipping {origin_path} no parts are available')
+            continue
         output_path = Path(work_dir, Path(origin_path).name)
         cat_cmd = ['cat'] + sorted(part_paths)
         zstd_cmd = ['pzstd', '--quiet', '--force', '--decompress', '-o', str(output_path)]
