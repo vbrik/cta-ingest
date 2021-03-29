@@ -6,6 +6,7 @@ from boto3.s3.transfer import TransferConfig
 import botocore
 from functools import partial
 import json
+import inspect
 import logging
 import re
 import signal
@@ -16,6 +17,9 @@ import os
 from pprint import pprint
 from pathlib import Path
 from time import time
+
+def _func_name():
+    return inspect.stack()[1][3] # caller function name
 
 def _rmdir_recursive(path):
     for fp in path.iterdir():
@@ -150,6 +154,7 @@ class ProgressMeter(object):
                 self._last_update_count = self._count
 
 def disassemble(s3w, work_dir, part_size, dry_run):
+    my_name = _func_name()
     my_state_key = 'disassemble.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     origin = s3w.get_from_json('origin.json', default={})
@@ -163,14 +168,19 @@ def disassemble(s3w, work_dir, part_size, dry_run):
         logging.info(f'Dry run: would have processed {my_unprocessed}')
         return
 
+    stats = []
     for fname in my_delivered:
-        logging.debug(f'Cleaning up {Path(work_dir, fname)}')
+        logging.debug(f'{my_name} cleaning up {Path(work_dir, fname)}')
         _rmdir_recursive(Path(work_dir, fname))
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
+        stats.append(fname)
+    if stats:
+        logging.info(f'{my_name} cleaned-up: {stats}')
 
+    stats = []
     for fname in my_unprocessed:
-        logging.debug(f'Compressing and splitting {fname}')
+        logging.debug(f'{my_name} compressing and splitting {fname}')
         chunk_dir = Path(work_dir, fname)
         if chunk_dir.exists():
             _rmdir_recursive(chunk_dir)
@@ -181,8 +191,12 @@ def disassemble(s3w, work_dir, part_size, dry_run):
         _run_pipeline(['nice', '-n', '19'] + zstd_cmd, split_cmd)
         my_state[fname] = [str(f) for f in chunk_dir.iterdir()]
         s3w.put_as_json(my_state, my_state_key)
+        stats.append(fname)
+    if stats:
+        logging.info(f'{my_name} processed: {stats}')
 
 def download(s3w, work_dir, dry_run):
+    my_name = _func_name()
     my_state_key = 'download.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     src_state = s3w.get_from_json('upload.json', default={})
@@ -196,12 +210,17 @@ def download(s3w, work_dir, dry_run):
         logging.info(f'Dry run: would have dowloaded {my_unprocessed}')
         return
 
+    stats = []
     for fname in my_delivered:
-        logging.debug(f'Cleaning up {Path(work_dir, fname)}')
+        logging.debug(f'{my_name} cleaning up {Path(work_dir, fname)}')
         _rmdir_recursive(Path(work_dir, fname))
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
+        stats.append(fname)
+    if stats:
+        logging.info(f'{my_name} cleaned-up: {stats}')
 
+    stats = []
     for origin_path in my_unprocessed:
         part_keys = src_state[origin_path]
         my_state.setdefault(origin_path, [])
@@ -217,13 +236,18 @@ def download(s3w, work_dir, dry_run):
                 s3w.download_file(part_key, dst_path)
                 my_state[origin_path].append(dst_path)
                 s3w.put_as_json(my_state, my_state_key)
+                stats.append(origin_path)
+    if stats:
+        logging.info(f'{my_name} processed: {stats}')
 
 def reassemble(s3w, work_dir, dst_dir):
+    my_name = _func_name()
     work_dir.mkdir(parents=True, exist_ok=True)
     dst_dir.mkdir(parents=True, exist_ok=True)
     src_state = s3w.get_from_json('download.json', default={})
     origin_state = s3w.get_from_json('origin.json')
 
+    stats = []
     for origin_path, part_paths in src_state.items():
         logging.debug(f'Processing {origin_path} from {len(part_paths)} parts')
         if not part_paths:
@@ -248,6 +272,10 @@ def reassemble(s3w, work_dir, dst_dir):
         else:
             output_path.rename(dst_dir/output_path.name)
             logging.debug(f'{dst_dir/output_path.name} arrived at its final destination')
+            stats.append(output_path.name)
+    if stats:
+        logging.info(f'{my_name} processed: {stats}')
+
 
 def refresh_terminus(s3w, root_dir, excludes, my_state_key):
     root_dir = root_dir.resolve()
@@ -277,6 +305,7 @@ def show_status(s3w):
     print('Mismatched:', mismatched)
 
 def upload(s3w, dry_run):
+    my_name = _func_name()
     my_state_key = 'upload.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     src_state = s3w.get_from_json('disassemble.json', default={})
@@ -295,13 +324,17 @@ def upload(s3w, dry_run):
         logging.info(f'Dry run: would have resumed uploading {partially_uploaded}')
         return
 
+    stats = []
     for fname in my_delivered:
         for key in my_state[fname]:
             logging.debug(f'Cleaning up {key}')
             s3w.delete_object(key)
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
+    if stats:
+        logging.info(f'{my_name} cleaned-up: {stats}')
 
+    stats = []
     for fname in my_unprocessed:
         my_state.setdefault(fname, [])
         for part_path in src_state[fname]:
@@ -317,6 +350,9 @@ def upload(s3w, dry_run):
                 s3w.upload_file(part_path, key)
             my_state[fname].append(key)
             s3w.put_as_json(my_state, my_state_key)
+            stats.append(fname)
+    if stats:
+        logging.info(f'{my_name} processed: {stats}')
 
 def main():
     def __formatter(max_help_position, width=90):
@@ -330,7 +366,7 @@ def main():
             formatter_class=__formatter(27))
 
     parser.add_argument('--debug', action='store_true', default=False,
-            help='Enable debugging')
+            help='Enable debug logging')
     
     subpars = parser.add_subparsers(title='commands', dest='command',
             description='Use "%(prog)s <command> -h" or similar to get command help.')
