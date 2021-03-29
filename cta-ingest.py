@@ -164,7 +164,7 @@ def disassemble(s3w, work_dir, part_size, dry_run):
         return
 
     for fname in my_delivered:
-        logging.info(f'Cleaning up {Path(work_dir, fname)}')
+        logging.debug(f'Cleaning up {Path(work_dir, fname)}')
         _rmdir_recursive(Path(work_dir, fname))
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
@@ -197,7 +197,7 @@ def download(s3w, work_dir, dry_run):
         return
 
     for fname in my_delivered:
-        logging.info(f'Cleaning up {Path(work_dir, fname)}')
+        logging.debug(f'Cleaning up {Path(work_dir, fname)}')
         _rmdir_recursive(Path(work_dir, fname))
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
@@ -297,7 +297,7 @@ def upload(s3w, dry_run):
 
     for fname in my_delivered:
         for key in my_state[fname]:
-            logging.info(f'Cleaning up {key}')
+            logging.debug(f'Cleaning up {key}')
             s3w.delete_object(key)
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
