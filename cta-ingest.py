@@ -176,7 +176,7 @@ def disassemble(s3w, work_dir, part_size, dry_run):
         s3w.put_as_json(my_state, my_state_key)
         stats.append(fname)
     if stats:
-        logging.info(f'{my_name} cleaned-up: {stats}')
+        logging.info(f'{my_name} cleaned-up: {len(stats)} files')
 
     stats = []
     for fname in my_unprocessed:
@@ -193,7 +193,7 @@ def disassemble(s3w, work_dir, part_size, dry_run):
         s3w.put_as_json(my_state, my_state_key)
         stats.append(fname)
     if stats:
-        logging.info(f'{my_name} processed: {stats}')
+        logging.info(f'{my_name} processed: {len(stats)} files')
 
 def download(s3w, work_dir, dry_run):
     my_name = _func_name()
@@ -218,7 +218,7 @@ def download(s3w, work_dir, dry_run):
         s3w.put_as_json(my_state, my_state_key)
         stats.append(fname)
     if stats:
-        logging.info(f'{my_name} cleaned-up: {stats}')
+        logging.info(f'{my_name} cleaned-up: {len(stats)} files')
 
     stats = []
     for origin_path in my_unprocessed:
@@ -238,7 +238,7 @@ def download(s3w, work_dir, dry_run):
                 s3w.put_as_json(my_state, my_state_key)
                 stats.append(origin_path)
     if stats:
-        logging.info(f'{my_name} processed: {stats}')
+        logging.info(f'{my_name} processed: {len(stats)} files')
 
 def reassemble(s3w, work_dir, dst_dir):
     my_name = _func_name()
@@ -274,7 +274,7 @@ def reassemble(s3w, work_dir, dst_dir):
             logging.debug(f'{dst_dir/output_path.name} arrived at its final destination')
             stats.append(output_path.name)
     if stats:
-        logging.info(f'{my_name} processed: {stats}')
+        logging.info(f'{my_name} processed: {len(stats)} files')
 
 
 def refresh_terminus(s3w, root_dir, excludes, my_state_key):
@@ -332,7 +332,7 @@ def upload(s3w, dry_run):
         my_state.pop(fname)
         s3w.put_as_json(my_state, my_state_key)
     if stats:
-        logging.info(f'{my_name} cleaned-up: {stats}')
+        logging.info(f'{my_name} cleaned-up: {len(stats)} files')
 
     stats = []
     for fname in my_unprocessed:
@@ -352,7 +352,7 @@ def upload(s3w, dry_run):
             s3w.put_as_json(my_state, my_state_key)
             stats.append(fname)
     if stats:
-        logging.info(f'{my_name} processed: {stats}')
+        logging.info(f'{my_name} processed: {len(stats)} files')
 
 def main():
     def __formatter(max_help_position, width=90):
