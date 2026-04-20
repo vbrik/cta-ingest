@@ -36,7 +36,9 @@ def _run_pipeline(cmd1: list[str], cmd2: list[str]) -> None:
 class NoSuchKeyError(Exception):
     pass
 
-class S3_Wrapper:
+
+# noinspection PyUnresolvedReferences
+class S3Wrapper:
     def __init__(self, endpoint_url: str, bucket: str) -> None:
         s3_pool_size = 150
         boto_config = botocore.config.Config(max_pool_connections=s3_pool_size,
@@ -95,7 +97,8 @@ class ProgressMeter(object):
         self._last_update_count: int | None = None
         self._lock = threading.Lock()
 
-    def __readable_size(self, size: float) -> str:
+    @staticmethod
+    def __readable_size(size: float) -> str:
         if size < 10**3:
             return '%s B' % int(size)
         elif size < 10**6:
@@ -107,11 +110,12 @@ class ProgressMeter(object):
         else:
             return '%.2f TiB' % (size/10**12)
 
-    def __readable_time(self, time: float) -> str:
-        time = int(round(time))
-        seconds = time % 60
-        minutes = (time // 60) % 60
-        hours = time // (60 * 60)
+    @staticmethod
+    def __readable_time(time_: float) -> str:
+        time_ = int(round(time_))
+        seconds = time_ % 60
+        minutes = (time_ // 60) % 60
+        hours = time_ // (60 * 60)
         if hours:
             return f'{hours}h {minutes}m {seconds}s'
         elif minutes:
@@ -131,7 +135,6 @@ class ProgressMeter(object):
             self._count += num_bytes
             t_observed = now - self._first_time
             t_since_update = now - self._last_update_time
-            b_since_update = self._count - self._last_update_count
 
             rs = partial(self.__readable_size)
             rt = partial(self.__readable_time)
@@ -154,7 +157,7 @@ class ProgressMeter(object):
                 self._last_update_time = now
                 self._last_update_count = self._count
 
-def disassemble(s3w: S3_Wrapper, work_dir: Path, part_size: int, dry_run: bool) -> None:
+def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -> None:
     my_name = _func_name()
     my_state_key = 'disassemble.json'
     my_state = s3w.get_from_json(my_state_key, default={})
@@ -170,33 +173,33 @@ def disassemble(s3w: S3_Wrapper, work_dir: Path, part_size: int, dry_run: bool) 
         return
 
     stats = []
-    for fname in my_delivered:
-        logging.debug(f'{my_name} cleaning up {Path(work_dir, fname)}')
-        _rmdir_recursive(Path(work_dir, fname))
-        my_state.pop(fname)
+    for filename in my_delivered:
+        logging.debug(f'{my_name} cleaning up {Path(work_dir, filename)}')
+        _rmdir_recursive(Path(work_dir, filename))
+        my_state.pop(filename)
         s3w.put_as_json(my_state, my_state_key)
-        stats.append(fname)
+        stats.append(filename)
     if stats:
         logging.info(f'{my_name} cleaned-up: {len(stats)} files')
 
     stats = []
-    for fname in my_unprocessed:
-        logging.debug(f'{my_name} compressing and splitting {fname}')
-        chunk_dir = Path(work_dir, fname)
+    for filename in my_unprocessed:
+        logging.debug(f'{my_name} compressing and splitting {filename}')
+        chunk_dir = Path(work_dir, filename)
         if chunk_dir.exists():
             _rmdir_recursive(chunk_dir)
         chunk_dir.mkdir(parents=True)
         # Compressing with --threads=0 seems to use 30-75% of CPU
-        zstd_cmd = ['zstd', '--threads=0', '--stdout', origin[fname]['path']]
+        zstd_cmd = ['zstd', '--threads=0', '--stdout', origin[filename]['path']]
         split_cmd = ['split', '-b', str(part_size), '-', str(chunk_dir) + '/']
         _run_pipeline(['nice', '-n', '19'] + zstd_cmd, split_cmd)
-        my_state[fname] = [str(f) for f in chunk_dir.iterdir()]
+        my_state[filename] = [str(f) for f in chunk_dir.iterdir()]
         s3w.put_as_json(my_state, my_state_key)
-        stats.append(fname)
+        stats.append(filename)
     if stats:
         logging.info(f'{my_name} processed: {len(stats)} files')
 
-def download(s3w: S3_Wrapper, work_dir: Path, dry_run: bool) -> None:
+def download(s3w: S3Wrapper, work_dir: Path, dry_run: bool) -> None:
     my_name = _func_name()
     my_state_key = 'download.json'
     my_state = s3w.get_from_json(my_state_key, default={})
@@ -208,16 +211,16 @@ def download(s3w: S3_Wrapper, work_dir: Path, dry_run: bool) -> None:
 
     if dry_run:
         logging.info(f'Dry run: would have cleaned-up {my_delivered}')
-        logging.info(f'Dry run: would have dowloaded {my_unprocessed}')
+        logging.info(f'Dry run: would have downloaded {my_unprocessed}')
         return
 
     stats = []
-    for fname in my_delivered:
-        logging.debug(f'{my_name} cleaning up {Path(work_dir, fname)}')
-        _rmdir_recursive(Path(work_dir, fname))
-        my_state.pop(fname)
+    for filename in my_delivered:
+        logging.debug(f'{my_name} cleaning up {Path(work_dir, filename)}')
+        _rmdir_recursive(Path(work_dir, filename))
+        my_state.pop(filename)
         s3w.put_as_json(my_state, my_state_key)
-        stats.append(fname)
+        stats.append(filename)
     if stats:
         logging.info(f'{my_name} cleaned-up: {len(stats)} files')
 
@@ -241,7 +244,7 @@ def download(s3w: S3_Wrapper, work_dir: Path, dry_run: bool) -> None:
     if stats:
         logging.info(f'{my_name} processed: {len(stats)} files')
 
-def reassemble(s3w: S3_Wrapper, work_dir: Path, dst_dir: Path) -> None:
+def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path) -> None:
     my_name = _func_name()
     work_dir.mkdir(parents=True, exist_ok=True)
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -256,6 +259,7 @@ def reassemble(s3w: S3_Wrapper, work_dir: Path, dst_dir: Path) -> None:
             continue
         output_path = Path(work_dir, Path(origin_path).name)
         cat_cmd = ['cat'] + sorted(part_paths)
+        # noinspection SpellCheckingInspection
         zstd_cmd = ['pzstd', '--quiet', '--force', '--decompress', '-o', str(output_path)]
         try:
             _run_pipeline(cat_cmd, zstd_cmd)
@@ -264,6 +268,7 @@ def reassemble(s3w: S3_Wrapper, work_dir: Path, dst_dir: Path) -> None:
             logging.warning(f'{e}')
             continue
         origin_file = origin_state[origin_path]
+        # noinspection SpellCheckingInspection
         os.utime(output_path, (origin_file['atime'], origin_file['mtime']))
         output_path.chmod(0o444)
         target_path = dst_dir/output_path.name
@@ -278,12 +283,13 @@ def reassemble(s3w: S3_Wrapper, work_dir: Path, dst_dir: Path) -> None:
         logging.info(f'{my_name} processed: {len(stats)} files')
 
 
-def refresh_terminus(s3w: S3_Wrapper, root_dir: Path, excludes: list[str], my_state_key: str) -> None:
+def refresh_terminus(s3w: S3Wrapper, root_dir: Path, excludes: list[str], my_state_key: str) -> None:
     root_dir = root_dir.resolve()
     state = {}
     relevant_files = [fp for fp in root_dir.iterdir()
                 if fp.is_file() and not sum(fp.name.startswith(pref) for pref in excludes)]
     for fp in relevant_files:
+        # noinspection SpellCheckingInspection
         state[str(fp.relative_to(root_dir))] = {
                 'path': str(fp.resolve()),
                 'size':fp.stat().st_size,
@@ -292,7 +298,7 @@ def refresh_terminus(s3w: S3_Wrapper, root_dir: Path, excludes: list[str], my_st
                 'ts':time(),}
     s3w.put_as_json(state, my_state_key)
 
-def show_status(s3w: S3_Wrapper) -> None:
+def show_status(s3w: S3Wrapper) -> None:
     # XXX handle missing state exceptions
     target = s3w.get_from_json('target.json')
     origin = s3w.get_from_json('origin.json')
@@ -305,7 +311,7 @@ def show_status(s3w: S3_Wrapper) -> None:
     print('Undelivered:', undelivered)
     print('Mismatched:', mismatched)
 
-def upload(s3w: S3_Wrapper, dry_run: bool) -> None:
+def upload(s3w: S3Wrapper, dry_run: bool) -> None:
     my_name = _func_name()
     my_state_key = 'upload.json'
     my_state = s3w.get_from_json(my_state_key, default={})
@@ -315,7 +321,7 @@ def upload(s3w: S3_Wrapper, dry_run: bool) -> None:
     my_delivered = set(my_state).intersection(target)
     my_unprocessed = set(src_state) - my_delivered - set(target)
     uploaded_parts = set(s3w.list_keys(prefix='parts'))
-    partially_uploaded = {fname for fname,parts in my_state.items()
+    partially_uploaded = {filename for filename,parts in my_state.items()
                             if uploaded_parts.intersection(parts)}
     unuploaded = my_unprocessed - partially_uploaded
 
@@ -326,32 +332,32 @@ def upload(s3w: S3_Wrapper, dry_run: bool) -> None:
         return
 
     stats = []
-    for fname in my_delivered:
-        for key in my_state[fname]:
+    for filename in my_delivered:
+        for key in my_state[filename]:
             logging.debug(f'Cleaning up {key}')
             s3w.delete_object(key)
-        my_state.pop(fname)
+        my_state.pop(filename)
         s3w.put_as_json(my_state, my_state_key)
     if stats:
         logging.info(f'{my_name} cleaned-up: {len(stats)} files')
 
     stats = []
-    for fname in my_unprocessed:
-        my_state.setdefault(fname, [])
-        for part_path in src_state[fname]:
+    for filename in my_unprocessed:
+        my_state.setdefault(filename, [])
+        for part_path in src_state[filename]:
             key = 'parts' + part_path
             if key in uploaded_parts:
                 logging.warning(f'Key {key} already uploaded')
-                if key not in my_state[fname]:
-                    logging.warning(f'Uploaded key {key} wasn\'t in {my_state_key}')
+                if key not in my_state[filename]:
+                    logging.warning(f"Uploaded key {key} wasn't in {my_state_key}")
                 else:
                     continue # key uploaded and in my_state
             else:
                 logging.debug(f'Uploading {part_path} as {key}')
                 s3w.upload_file(part_path, key)
-            my_state[fname].append(key)
+            my_state[filename].append(key)
             s3w.put_as_json(my_state, my_state_key)
-            stats.append(fname)
+            stats.append(filename)
     if stats:
         logging.info(f'{my_name} processed: {len(stats)} files')
 
@@ -369,23 +375,23 @@ def main() -> None:
     parser.add_argument('--debug', action='store_true', default=False,
             help='Enable debug logging')
     
-    subpars = parser.add_subparsers(title='commands', dest='command',
+    subparsers = parser.add_subparsers(title='commands', dest='command',
             description='Use "%(prog)s <command> -h" or similar to get command help.')
-    par_status = subpars.add_parser('status', formatter_class=ArgumentDefaultsHelpFormatter,
+    subparsers.add_parser('status', formatter_class=ArgumentDefaultsHelpFormatter,
             help='display status summary')
-    par_refresh_origin = subpars.add_parser('refresh_origin', formatter_class=__formatter(27),
+    par_refresh_origin = subparsers.add_parser('refresh_origin', formatter_class=__formatter(27),
             help='update the list of files currently in the origin directory')
     par_refresh_origin.add_argument('-x', dest='excludes', nargs='*', metavar='PREF', default=[],
             help='exclude files whose names start with PREF')
     par_refresh_origin.add_argument('path', metavar='ORIGIN_PATH', type=__abs_path,
             help='path to monitor')
 
-    par_refresh_target = subpars.add_parser('refresh_target', formatter_class=__formatter(27),
+    par_refresh_target = subparsers.add_parser('refresh_target', formatter_class=__formatter(27),
             help='update the list of files currently in the target directory')
     par_refresh_target.add_argument('path', metavar='PATH', type=__abs_path,
             help='path to monitor')
 
-    par_disassemble = subpars.add_parser('disassemble', formatter_class=ArgumentDefaultsHelpFormatter,
+    par_disassemble = subparsers.add_parser('disassemble', formatter_class=ArgumentDefaultsHelpFormatter,
             help='prepare origin files for uploading to the S3 bucket')
     par_disassemble.add_argument('path', metavar='PATH', type=__abs_path,
             help='directory where to store file parts')
@@ -394,21 +400,21 @@ def main() -> None:
     par_disassemble.add_argument('--dry-run', default=False, action='store_true',
             help='dry run')
     
-    par_upload = subpars.add_parser('upload', formatter_class=ArgumentDefaultsHelpFormatter,
+    par_upload = subparsers.add_parser('upload', formatter_class=ArgumentDefaultsHelpFormatter,
             help='upload disassembled files to the S3 bucket')
     par_upload.add_argument('--timeout', metavar='SECONDS', type=int,
             help='terminate after this amount of time')
     par_upload.add_argument('--dry-run', default=False, action='store_true',
             help='dry run')
 
-    par_download = subpars.add_parser('download', formatter_class=ArgumentDefaultsHelpFormatter,
+    par_download = subparsers.add_parser('download', formatter_class=ArgumentDefaultsHelpFormatter,
             help='download file parts from S3')
     par_download.add_argument('path', metavar='PATH', type=__abs_path,
             help='directory where to store file parts')
     par_download.add_argument('--dry-run', default=False, action='store_true',
             help='dry run')
     
-    par_reassemble = subpars.add_parser('reassemble', formatter_class=ArgumentDefaultsHelpFormatter,
+    par_reassemble = subparsers.add_parser('reassemble', formatter_class=ArgumentDefaultsHelpFormatter,
             help='reassemble files from parts')
     par_reassemble.add_argument('dst_path', metavar='TARGET_PATH', type=__abs_path,
             help='final destination directory')
@@ -442,7 +448,7 @@ def main() -> None:
         parser.print_help()
         parser.exit()
 
-    s3w = S3_Wrapper(args.s3_url, args.bucket)
+    s3w = S3Wrapper(args.s3_url, args.bucket)
 
     if args.command == 'status':
         show_status(s3w)
