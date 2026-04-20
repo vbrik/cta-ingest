@@ -51,7 +51,7 @@ def test_reassemble_basic(s3w, tmp_path):
     part_paths, origin_state = make_zstd_parts(tmp_path / "setup", filename, content, num_parts=3)
     s3w.put_as_json({filename: part_paths}, "download.json")
     s3w.put_as_json(origin_state, "origin.json")
-    cta_ingest.reassemble(s3w, work_dir, dst_dir)
+    cta_ingest.reassemble(s3w, work_dir, dst_dir, dry_run=False)
     output = dst_dir / filename
     assert output.exists()
     # Stat before reading: read_bytes() can advance atime on strictatime filesystems.
@@ -67,7 +67,7 @@ def test_reassemble_skips_empty_parts(s3w, tmp_path):
     s3w.put_as_json({"badfile.dat": {"mtime": 0.0, "atime": 0.0, "size": 0}}, "origin.json")
     work_dir = tmp_path / "work"
     dst_dir = tmp_path / "dst"
-    cta_ingest.reassemble(s3w, work_dir, dst_dir)  # must not raise
+    cta_ingest.reassemble(s3w, work_dir, dst_dir, dry_run=False)  # must not raise
     # reassemble() creates dst_dir unconditionally, so only emptiness is meaningful here.
     assert not any(dst_dir.iterdir())
 
@@ -75,7 +75,7 @@ def test_reassemble_skips_empty_parts(s3w, tmp_path):
 def test_reassemble_missing_origin_raises(s3w, tmp_path):
     s3w.put_as_json({"f.dat": ["/fake/path"]}, "download.json")
     with pytest.raises(cta_ingest.NoSuchKeyError):
-        cta_ingest.reassemble(s3w, tmp_path / "work", tmp_path / "dst")
+        cta_ingest.reassemble(s3w, tmp_path / "work", tmp_path / "dst", dry_run=False)
 
 
 def test_reassemble_dst_dir_created(s3w, tmp_path):
@@ -85,7 +85,7 @@ def test_reassemble_dst_dir_created(s3w, tmp_path):
     part_paths, origin_state = make_zstd_parts(tmp_path / "setup", filename, content)
     s3w.put_as_json({filename: part_paths}, "download.json")
     s3w.put_as_json(origin_state, "origin.json")
-    cta_ingest.reassemble(s3w, tmp_path / "work", dst_dir)
+    cta_ingest.reassemble(s3w, tmp_path / "work", dst_dir, dry_run=False)
     assert dst_dir.exists()
     assert (dst_dir / filename).exists()
 
@@ -99,7 +99,7 @@ def test_reassemble_skips_if_dst_exists(s3w, tmp_path):
     part_paths, origin_state = make_zstd_parts(tmp_path / "setup", filename, content)
     s3w.put_as_json({filename: part_paths}, "download.json")
     s3w.put_as_json(origin_state, "origin.json")
-    cta_ingest.reassemble(s3w, tmp_path / "work", dst_dir)
+    cta_ingest.reassemble(s3w, tmp_path / "work", dst_dir, dry_run=False)
     assert (dst_dir / filename).read_bytes() == b"existing"
 
 
@@ -122,8 +122,20 @@ def test_reassemble_continues_after_failure(s3w, tmp_path):
     s3w.put_as_json({**good_origin, **bad_origin}, "origin.json")
 
     dst_dir = tmp_path / "dst"
-    cta_ingest.reassemble(s3w, tmp_path / "work", dst_dir)
+    cta_ingest.reassemble(s3w, tmp_path / "work", dst_dir, dry_run=False)
 
     assert (dst_dir / "good.dat").exists()
     assert (dst_dir / "good.dat").read_bytes() == good_content
     assert not (dst_dir / "bad.dat").exists()
+
+
+def test_reassemble_dry_run_skips_output(s3w, tmp_path):
+    content = b"dry run payload " * 500
+    filename = "dryfile.dat"
+    work_dir = tmp_path / "work"
+    dst_dir = tmp_path / "dst"
+    part_paths, origin_state = make_zstd_parts(tmp_path / "setup", filename, content)
+    s3w.put_as_json({filename: part_paths}, "download.json")
+    s3w.put_as_json(origin_state, "origin.json")
+    cta_ingest.reassemble(s3w, work_dir, dst_dir, dry_run=True)
+    assert not (dst_dir / filename).exists()

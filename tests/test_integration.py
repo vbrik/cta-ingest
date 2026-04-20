@@ -22,7 +22,7 @@ def _run_all_stages(s3w, origin_dir, disassemble_work, download_work, reassemble
     cta_ingest.disassemble(s3w, disassemble_work, PART_SIZE, dry_run=False)
     cta_ingest.upload(s3w, dry_run=False)
     cta_ingest.download(s3w, download_work, dry_run=False)
-    cta_ingest.reassemble(s3w, reassemble_work, dst_dir)
+    cta_ingest.reassemble(s3w, reassemble_work, dst_dir, dry_run=False)
     cta_ingest.refresh_terminus(s3w, dst_dir, excludes=["."], my_state_key="target.json")
 
 
