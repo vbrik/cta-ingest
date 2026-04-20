@@ -244,7 +244,7 @@ def download(s3w: S3Wrapper, work_dir: Path, dry_run: bool) -> None:
     if stats:
         logging.info(f'{my_name} processed: {len(stats)} files')
 
-def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path) -> None:
+def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path, dry_run: bool) -> None:
     my_name = _func_name()
     work_dir.mkdir(parents=True, exist_ok=True)
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -263,6 +263,9 @@ def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path) -> None:
         # (target path may exist because it was transferred out-of-band).
         if target_path.exists():
             logging.error(f'{target_path} exists')
+            continue
+        if dry_run:
+            logging.info(f"Skipping {part_paths} due to dry run")
             continue
         cat_cmd = ['cat'] + sorted(part_paths)
         # noinspection SpellCheckingInspection
@@ -471,7 +474,7 @@ def main() -> int:
     elif args.command == 'download':
         download(s3w, args.path, args.dry_run)
     elif args.command == 'reassemble':
-        reassemble(s3w, args.work_dir, args.dst_path)
+        reassemble(s3w, args.work_dir, args.dst_path, args.dry_run)
 
     return 0
 
