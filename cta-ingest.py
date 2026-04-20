@@ -429,6 +429,8 @@ def main() -> int:
             help='final destination directory')
     par_reassemble.add_argument('--work-dir', metavar='WORK_PATH', type=__abs_path, required=True,
             help='temporary storage directory in the same file system as TARGET_PATH')
+    par_reassemble.add_argument('--dry-run', default=False, action='store_true',
+            help='dry run')
 
     s3_grp = parser.add_argument_group('S3 options',
             description='Note that S3 credential arguments are optional. '
