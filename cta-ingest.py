@@ -15,16 +15,17 @@ import threading
 import os
 from pathlib import Path
 from time import time
+from typing import Any
 
-def _func_name():
+def _func_name() -> str:
     return inspect.stack()[1][3] # caller function name
 
-def _rmdir_recursive(path):
+def _rmdir_recursive(path: Path) -> None:
     for fp in path.iterdir():
         fp.unlink()
     path.rmdir()
 
-def _run_pipeline(cmd1, cmd2):
+def _run_pipeline(cmd1: list[str], cmd2: list[str]) -> None:
     p1 = Popen(cmd1, stdout=PIPE)
     p2 = Popen(cmd2, stdin=p1.stdout)
     p1.stdout.close() # Allow p1 to receive SIGPIPE if p2 exits.
@@ -36,7 +37,7 @@ class NoSuchKeyError(Exception):
     pass
 
 class S3_Wrapper:
-    def __init__(self, endpoint_url, bucket):
+    def __init__(self, endpoint_url: str, bucket: str) -> None:
         s3_pool_size = 150
         boto_config = botocore.config.Config(max_pool_connections=s3_pool_size,
                                              request_checksum_calculation='when_required',
@@ -51,7 +52,7 @@ class S3_Wrapper:
                                         multipart_chunksize=2**20)
         self._progress_interval=120
 
-    def get_from_json(self, key, **kwargs):
+    def get_from_json(self, key: str, **kwargs: Any) -> Any:
         obj = self._s3r.Object(self._bucket, key)
         try:
             body = obj.get()['Body'].read()
@@ -62,39 +63,39 @@ class S3_Wrapper:
             raise NoSuchKeyError
         return json.loads(body)
 
-    def put_as_json(self, state, key):
+    def put_as_json(self, state: dict[str, Any], key: str) -> None:
         body = json.dumps(state)
         self._s3c.put_object(Bucket=self._bucket, Key=key, Body=body)
 
-    def download_file(self, key, path):
+    def download_file(self, key: str, path: str) -> None:
         self._s3c.download_file(self._bucket, key, path)
 
-    def upload_file(self, path, key):
+    def upload_file(self, path: str, key: str) -> None:
         label = '...' + path[-17:]
         size = Path(path).stat().st_size
         self._s3c.upload_file(path, self._bucket, key, Config=self._tx_config,
                  Callback=ProgressMeter(label, size, self._progress_interval))
 
-    def delete_object(self, key):
+    def delete_object(self, key: str) -> None:
         self._s3c.delete_object(Bucket=self._bucket, Key=key)
 
-    def list_keys(self, prefix=''):
+    def list_keys(self, prefix: str = '') -> list[str]:
         return [obj.key for obj in self._s3b.objects.filter(Prefix=prefix)]
 
 class ProgressMeter(object):
     # To simplify, assume this is hooked up to a single operation
-    def __init__(self, label, size, update_interval=10):
+    def __init__(self, label: str, size: int, update_interval: int = 10) -> None:
         self._label = label
         self._size = size
         self._count = 0
-        self._first_time = None
-        self._first_count = None
+        self._first_time: float | None = None
+        self._first_count: int | None = None
         self._update_interval = update_interval
-        self._last_update_time = None
-        self._last_update_count = None
+        self._last_update_time: float | None = None
+        self._last_update_count: int | None = None
         self._lock = threading.Lock()
 
-    def __readable_size(self, size):
+    def __readable_size(self, size: float) -> str:
         if size < 10**3:
             return '%s B' % int(size)
         elif size < 10**6:
@@ -106,7 +107,7 @@ class ProgressMeter(object):
         else:
             return '%.2f TiB' % (size/10**12)
 
-    def __readable_time(self, time):
+    def __readable_time(self, time: float) -> str:
         time = int(round(time))
         seconds = time % 60
         minutes = (time // 60) % 60
@@ -118,7 +119,7 @@ class ProgressMeter(object):
         else:
             return f'{seconds}s'
 
-    def __call__(self, num_bytes):
+    def __call__(self, num_bytes: int) -> None:
         with self._lock:
             now = time()
             if self._first_time is None:
@@ -153,7 +154,7 @@ class ProgressMeter(object):
                 self._last_update_time = now
                 self._last_update_count = self._count
 
-def disassemble(s3w, work_dir, part_size, dry_run):
+def disassemble(s3w: S3_Wrapper, work_dir: Path, part_size: int, dry_run: bool) -> None:
     my_name = _func_name()
     my_state_key = 'disassemble.json'
     my_state = s3w.get_from_json(my_state_key, default={})
@@ -195,7 +196,7 @@ def disassemble(s3w, work_dir, part_size, dry_run):
     if stats:
         logging.info(f'{my_name} processed: {len(stats)} files')
 
-def download(s3w, work_dir, dry_run):
+def download(s3w: S3_Wrapper, work_dir: Path, dry_run: bool) -> None:
     my_name = _func_name()
     my_state_key = 'download.json'
     my_state = s3w.get_from_json(my_state_key, default={})
@@ -240,7 +241,7 @@ def download(s3w, work_dir, dry_run):
     if stats:
         logging.info(f'{my_name} processed: {len(stats)} files')
 
-def reassemble(s3w, work_dir, dst_dir):
+def reassemble(s3w: S3_Wrapper, work_dir: Path, dst_dir: Path) -> None:
     my_name = _func_name()
     work_dir.mkdir(parents=True, exist_ok=True)
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -277,7 +278,7 @@ def reassemble(s3w, work_dir, dst_dir):
         logging.info(f'{my_name} processed: {len(stats)} files')
 
 
-def refresh_terminus(s3w, root_dir, excludes, my_state_key):
+def refresh_terminus(s3w: S3_Wrapper, root_dir: Path, excludes: list[str], my_state_key: str) -> None:
     root_dir = root_dir.resolve()
     state = {}
     relevant_files = [fp for fp in root_dir.iterdir()
@@ -291,7 +292,7 @@ def refresh_terminus(s3w, root_dir, excludes, my_state_key):
                 'ts':time(),}
     s3w.put_as_json(state, my_state_key)
 
-def show_status(s3w):
+def show_status(s3w: S3_Wrapper) -> None:
     # XXX handle missing state exceptions
     target = s3w.get_from_json('target.json')
     origin = s3w.get_from_json('origin.json')
@@ -304,7 +305,7 @@ def show_status(s3w):
     print('Undelivered:', undelivered)
     print('Mismatched:', mismatched)
 
-def upload(s3w, dry_run):
+def upload(s3w: S3_Wrapper, dry_run: bool) -> None:
     my_name = _func_name()
     my_state_key = 'upload.json'
     my_state = s3w.get_from_json(my_state_key, default={})
@@ -354,11 +355,11 @@ def upload(s3w, dry_run):
     if stats:
         logging.info(f'{my_name} processed: {len(stats)} files')
 
-def main():
-    def __formatter(max_help_position, width=90):
+def main() -> None:
+    def __formatter(max_help_position: int, width: int = 90):
         return lambda prog: ArgumentDefaultsHelpFormatter(prog,
                                         max_help_position=max_help_position, width=width)
-    def __abs_path(path):
+    def __abs_path(path: str) -> Path:
         return Path(path).resolve()
 
     parser = argparse.ArgumentParser(
