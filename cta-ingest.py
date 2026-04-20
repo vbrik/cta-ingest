@@ -258,6 +258,12 @@ def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path) -> None:
             logging.warning(f'Skipping {origin_path} because no parts are available')
             continue
         output_path = Path(work_dir, Path(origin_path).name)
+        target_path = dst_dir/output_path.name
+        # We never want to overwrite, so early short-circuit to not do unnecessary work
+        # (target path may exist because it was transferred out-of-band).
+        if target_path.exists():
+            logging.error(f'{target_path} exists')
+            continue
         cat_cmd = ['cat'] + sorted(part_paths)
         # noinspection SpellCheckingInspection
         zstd_cmd = ['pzstd', '--quiet', '--force', '--decompress', '-o', str(output_path)]
@@ -271,13 +277,13 @@ def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path) -> None:
         # noinspection SpellCheckingInspection
         os.utime(output_path, (origin_file['atime'], origin_file['mtime']))
         output_path.chmod(0o444)
-        target_path = dst_dir/output_path.name
+        # Path.rename on Linux silently overwrites, so there is a TOCTOU race here
         if target_path.exists():
             logging.error(f'{target_path} exists')
             continue
         else:
-            output_path.rename(dst_dir/output_path.name)
-            logging.debug(f'{dst_dir/output_path.name} arrived at its final destination')
+            output_path.rename(target_path)
+            logging.debug(f'{target_path} arrived at its final destination')
             stats.append(output_path.name)
     if stats:
         logging.info(f'{my_name} processed: {len(stats)} files')
@@ -361,7 +367,7 @@ def upload(s3w: S3Wrapper, dry_run: bool) -> None:
     if stats:
         logging.info(f'{my_name} processed: {len(stats)} files')
 
-def main() -> None:
+def main() -> int:
     def __formatter(max_help_position: int, width: int = 90):
         return lambda prog: ArgumentDefaultsHelpFormatter(prog,
                                         max_help_position=max_help_position, width=width)
@@ -467,5 +473,14 @@ def main() -> None:
     elif args.command == 'reassemble':
         reassemble(s3w, args.work_dir, args.dst_path)
 
+    return 0
+
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        ret = main()
+    except Exception:
+        # log time of the exception
+        logging.error('An exception occurred')
+        raise
+    sys.exit(ret)
+
