@@ -47,6 +47,10 @@ def test_upload_key_naming(s3w, work_dir):
     assert state["file.fits"] == ["parts" + paths[0]]
 
 
+# Source bug note: upload()'s cleanup loop in cta-ingest.py never appends to its
+# `stats` list, so its "cleaned-up: N files" log line never fires. This test does
+# not cover it because these tests do not inspect log output; the check below only
+# validates the side effects (state cleared, S3 object deleted).
 def test_upload_cleanup_delivered(s3w, work_dir):
     # A key that was previously uploaded for a now-delivered file should be deleted from S3
     delivered_key = "parts/delivered_part"
@@ -57,6 +61,26 @@ def test_upload_cleanup_delivered(s3w, work_dir):
     cta_ingest.upload(s3w, dry_run=False)
     assert "delivered.fits" not in s3w.get_from_json("upload.json", default={})
     assert delivered_key not in s3w.list_keys()
+
+
+def test_upload_resume_partial(s3w, work_dir):
+    """Parts already present in S3 are not re-uploaded; missing parts are uploaded and recorded."""
+    paths = make_chunk_dir(work_dir, "file.fits", num_chunks=3)
+    first_key = "parts" + paths[0]
+    # Pre-seed S3 with a recognizable body so we can verify it's left untouched.
+    s3w._s3c.put_object(Bucket="test-bucket", Key=first_key, Body=b"preexisting-body")
+
+    s3w.put_as_json({"file.fits": paths}, "disassemble.json")
+    s3w.put_as_json({"file.fits": [first_key]}, "upload.json")
+    s3w.put_as_json({}, "target.json")
+
+    cta_ingest.upload(s3w, dry_run=False)
+
+    state = s3w.get_from_json("upload.json")
+    expected_keys = {"parts" + p for p in paths}
+    assert set(state["file.fits"]) == expected_keys
+    body = s3w._s3c.get_object(Bucket="test-bucket", Key=first_key)["Body"].read()
+    assert body == b"preexisting-body"
 
 
 def test_upload_missing_target_raises(s3w, work_dir):

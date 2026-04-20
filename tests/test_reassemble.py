@@ -54,9 +54,12 @@ def test_reassemble_basic(s3w, tmp_path):
     cta_ingest.reassemble(s3w, work_dir, dst_dir)
     output = dst_dir / filename
     assert output.exists()
+    # Stat before reading: read_bytes() can advance atime on strictatime filesystems.
+    stat = output.stat()
+    assert oct(stat.st_mode & 0o777) == "0o444"
+    assert abs(stat.st_mtime - origin_state[filename]["mtime"]) < 1.0
+    assert abs(stat.st_atime - origin_state[filename]["atime"]) < 1.0
     assert output.read_bytes() == content
-    assert oct(output.stat().st_mode & 0o777) == "0o444"
-    assert abs(output.stat().st_mtime - origin_state[filename]["mtime"]) < 1.0
 
 
 def test_reassemble_skips_empty_parts(s3w, tmp_path):
@@ -65,7 +68,8 @@ def test_reassemble_skips_empty_parts(s3w, tmp_path):
     work_dir = tmp_path / "work"
     dst_dir = tmp_path / "dst"
     cta_ingest.reassemble(s3w, work_dir, dst_dir)  # must not raise
-    assert not dst_dir.exists() or not any(dst_dir.iterdir())
+    # reassemble() creates dst_dir unconditionally, so only emptiness is meaningful here.
+    assert not any(dst_dir.iterdir())
 
 
 def test_reassemble_missing_origin_raises(s3w, tmp_path):
@@ -97,3 +101,29 @@ def test_reassemble_skips_if_dst_exists(s3w, tmp_path):
     s3w.put_as_json(origin_state, "origin.json")
     cta_ingest.reassemble(s3w, tmp_path / "work", dst_dir)
     assert (dst_dir / filename).read_bytes() == b"existing"
+
+
+def test_reassemble_continues_after_failure(s3w, tmp_path):
+    """A corrupted file's parts must not prevent other files from reassembling."""
+    good_content = b"good payload " * 500
+    good_parts, good_origin = make_zstd_parts(tmp_path / "good_setup", "good.dat", good_content)
+
+    bad_parts_dir = tmp_path / "bad_setup" / "bad.dat"
+    bad_parts_dir.mkdir(parents=True)
+    bad_part = bad_parts_dir / "part_00"
+    bad_part.write_bytes(b"this is not a valid zstd stream")
+    bad_origin = {
+        "bad.dat": {"path": str(bad_parts_dir), "size": 0, "mtime": 0.0, "atime": 0.0}
+    }
+
+    s3w.put_as_json(
+        {"good.dat": good_parts, "bad.dat": [str(bad_part)]}, "download.json"
+    )
+    s3w.put_as_json({**good_origin, **bad_origin}, "origin.json")
+
+    dst_dir = tmp_path / "dst"
+    cta_ingest.reassemble(s3w, tmp_path / "work", dst_dir)
+
+    assert (dst_dir / "good.dat").exists()
+    assert (dst_dir / "good.dat").read_bytes() == good_content
+    assert not (dst_dir / "bad.dat").exists()

@@ -8,13 +8,12 @@ Kept in a separate file so it can be run selectively with:
     pytest tests/test_integration.py
 """
 import os
-import pytest
 import cta_ingest
 
 PART_SIZE = 50_000  # 50 KB — produces multiple split chunks from 200 KB+ random data
 
 
-def _run_pipeline(s3w, origin_dir, disassemble_work, download_work, reassemble_work, dst_dir):
+def _run_all_stages(s3w, origin_dir, disassemble_work, download_work, reassemble_work, dst_dir):
     """Execute all six pipeline stages in order against a pre-populated origin_dir."""
     # target.json must exist before disassemble/upload/download (no default in source)
     s3w.put_as_json({}, "target.json")
@@ -38,7 +37,7 @@ def test_full_pipeline(s3w, tmp_path):
         (origin_dir / name).write_bytes(data)
 
     dst_dir = tmp_path / "dst"
-    _run_pipeline(
+    _run_all_stages(
         s3w,
         origin_dir,
         disassemble_work=tmp_path / "disassemble_work",

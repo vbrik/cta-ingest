@@ -73,3 +73,31 @@ def test_disassemble_missing_target_raises(s3w, work_dir, origin_dir):
     s3w.put_as_json({"f.fits": entry}, "origin.json")
     with pytest.raises(cta_ingest.NoSuchKeyError):
         cta_ingest.disassemble(s3w, work_dir, PART_SIZE, dry_run=False)
+
+
+def test_disassemble_mixed_state(s3w, work_dir, origin_dir):
+    """A single call handles new, in-progress, and delivered files together."""
+    new_entry = make_origin_entry(origin_dir, "new.fits")
+    inprog_entry = make_origin_entry(origin_dir, "inprog.fits")
+    delivered_entry = make_origin_entry(origin_dir, "delivered.fits")
+    s3w.put_as_json(
+        {"new.fits": new_entry, "inprog.fits": inprog_entry, "delivered.fits": delivered_entry},
+        "origin.json",
+    )
+    s3w.put_as_json({"delivered.fits": delivered_entry}, "target.json")
+    s3w.put_as_json(
+        {"inprog.fits": ["/fake/inprog_chunk"], "delivered.fits": ["/fake/delivered_chunk"]},
+        "disassemble.json",
+    )
+    delivered_chunk_dir = work_dir / "delivered.fits"
+    delivered_chunk_dir.mkdir()
+    (delivered_chunk_dir / "aa").write_bytes(b"x")
+
+    cta_ingest.disassemble(s3w, work_dir, PART_SIZE, dry_run=False)
+
+    state = s3w.get_from_json("disassemble.json")
+    assert "new.fits" in state
+    assert all(Path(p).exists() for p in state["new.fits"])
+    assert state["inprog.fits"] == ["/fake/inprog_chunk"]
+    assert "delivered.fits" not in state
+    assert not delivered_chunk_dir.exists()

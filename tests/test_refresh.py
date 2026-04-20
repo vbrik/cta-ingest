@@ -48,6 +48,15 @@ def test_refresh_empty_dir(s3w, origin_dir):
     assert s3w.get_from_json("origin.json") == {}
 
 
+def test_refresh_ignores_subdirectories(s3w, origin_dir):
+    (origin_dir / "file.txt").write_bytes(b"x")
+    (origin_dir / "nested").mkdir()
+    (origin_dir / "nested" / "inner.txt").write_bytes(b"y")
+    cta_ingest.refresh_terminus(s3w, origin_dir, excludes=[], my_state_key="origin.json")
+    result = s3w.get_from_json("origin.json")
+    assert list(result.keys()) == ["file.txt"]
+
+
 def test_show_status_all_delivered(s3w, capsys):
     origin = {"a.fits": {"size": 100}, "b.fits": {"size": 200}}
     target = {"a.fits": {"size": 100}, "b.fits": {"size": 200}}
@@ -68,7 +77,8 @@ def test_show_status_some_undelivered(s3w, capsys):
     cta_ingest.show_status(s3w)
     out = capsys.readouterr().out
     assert "Present: 1" in out
-    assert "b.fits" in out
+    assert "Undelivered: ['b.fits']" in out
+    assert "Mismatched: []" in out
 
 
 def test_show_status_size_mismatch(s3w, capsys):
@@ -78,7 +88,9 @@ def test_show_status_size_mismatch(s3w, capsys):
     s3w.put_as_json(target, "target.json")
     cta_ingest.show_status(s3w)
     out = capsys.readouterr().out
-    assert "a.fits" in out
+    assert "Present: 1" in out
+    assert "Undelivered: []" in out
+    assert "Mismatched: ['a.fits']" in out
 
 
 def test_show_status_missing_target_raises(s3w):

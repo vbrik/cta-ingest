@@ -18,6 +18,10 @@ def test_get_json_missing_with_default(s3w):
     assert s3w.get_from_json("nonexistent.json", default={"x": 2}) == {"x": 2}
 
 
+# get_from_json collapses every botocore.ClientError into NoSuchKeyError, so a
+# non-NoSuchKey failure (e.g. AccessDenied) is surfaced under a misleading name.
+# Not covered here because moto does not make it straightforward to simulate
+# such errors against a mocked S3.
 def test_get_json_missing_no_default_raises(s3w):
     with pytest.raises(cta_ingest.NoSuchKeyError):
         s3w.get_from_json("nonexistent.json")

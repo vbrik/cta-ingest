@@ -63,19 +63,25 @@ def test_download_cleanup_delivered(s3w, work_dir):
     assert delivered not in s3w.get_from_json("download.json", default={})
 
 
-def test_download_idempotent(s3w, work_dir):
-    # A part already listed in download.json must not be overwritten
+def test_download_idempotent_and_resumes(s3w, work_dir):
+    """Pre-existing parts must not be overwritten; missing parts must be fetched."""
     upload_state, content_map = upload_fake_parts(s3w, "file.fits", num_parts=2)
     chunk_dir = work_dir / "file.fits"
     chunk_dir.mkdir()
-    first_key = sorted(content_map.keys())[0]
+    first_key, second_key = sorted(content_map.keys())
     first_path = str(chunk_dir / Path(first_key).name)
+    second_path = str(chunk_dir / Path(second_key).name)
     Path(first_path).write_bytes(b"preexisting")
     s3w.put_as_json({"file.fits": [first_path]}, "download.json")
     s3w.put_as_json(upload_state, "upload.json")
     s3w.put_as_json({}, "target.json")
+
     cta_ingest.download(s3w, work_dir, dry_run=False)
+
     assert Path(first_path).read_bytes() == b"preexisting"
+    state = s3w.get_from_json("download.json")
+    assert set(state["file.fits"]) == {first_path, second_path}
+    assert Path(second_path).read_bytes() == content_map[second_key]
 
 
 def test_download_missing_target_raises(s3w, work_dir):
