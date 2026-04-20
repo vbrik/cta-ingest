@@ -8,13 +8,11 @@ from functools import partial
 import json
 import inspect
 import logging
-import re
 import signal
 from subprocess import PIPE, Popen
 import sys
 import threading
 import os
-from pprint import pprint
 from pathlib import Path
 from time import time
 

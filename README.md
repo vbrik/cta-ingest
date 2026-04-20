@@ -1,22 +1,23 @@
 # CTA Ingest
-This application transfers data between sites via an S3 bucket. It is intended for an environment with unusual networking restrictions.
+This application transfers data between sites via an S3 bucket. It was written for an environment with unusual networking restrictions.
 
 "CTA" refers to the Cherenkov Telescope Array Observatory.
 
 # Overview
-CTA Ingest is like a highly-specialized rsync.
+CTA Ingest is kind of like a weird little rsync.
+It operates by implementing a distributed file/data processing pipeline, roughly as follows:
 
-It operates roughly as follows:
-
-On the source host:
+Stages on the source host:
 1. Build a list of files in the source data directory ("origin").
 1. Identify files that haven't yet been delivered to the final destination directory ("target").
 1. Compress, split into parts, and upload those files to an S3 bucket.
 
-On the destination host:
+Stages on the destination host:
 1. Download file parts from the bucket.
 1. Concatenate and decompress them in a temporary location on the same file system as the target.
 1. Move the file to the target directory (moving ensures no partial files in the target).
+
+Coordination among stages is implemented using json files the S3 bucket.
 
 Run the application with the `--help` flag for more information.
 
