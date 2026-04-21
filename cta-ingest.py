@@ -383,6 +383,8 @@ def main() -> int:
 
     parser.add_argument('--debug', action='store_true', default=False,
             help='Enable debug logging')
+    parser.add_argument('--boto-debug', action='store_true', default=False,
+            help='Enable debug logging for boto3/botocore/s3transfer')
     
     subparsers = parser.add_subparsers(title='commands', dest='command',
             description='Use "%(prog)s <command> -h" or similar to get command help.')
@@ -446,9 +448,11 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    boto3.set_stream_logger('botocore.credentials', level=logging.WARNING)
     logging.basicConfig(level=(logging.DEBUG if args.debug else logging.INFO),
             format='%(asctime)-23s %(levelname)s %(message)s')
+    boto_level = logging.DEBUG if args.boto_debug else logging.WARNING
+    for _lib in ('boto3', 'botocore', 's3transfer'):
+        logging.getLogger(_lib).setLevel(boto_level)
 
     args_dict = args.__dict__.copy()
     args_dict.pop('access_key_id')
