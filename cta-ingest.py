@@ -451,7 +451,7 @@ def main() -> int:
     logging.basicConfig(level=(logging.DEBUG if args.debug else logging.INFO),
             format='%(asctime)-23s %(levelname)s %(message)s')
     boto_level = logging.DEBUG if args.boto_debug else logging.WARNING
-    for _lib in ('boto3', 'botocore', 's3transfer'):
+    for _lib in ('boto3', 'botocore', 's3transfer', 'urllib3'):
         logging.getLogger(_lib).setLevel(boto_level)
 
     args_dict = args.__dict__.copy()
