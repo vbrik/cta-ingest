@@ -41,9 +41,12 @@ class NoSuchKeyError(Exception):
 class S3Wrapper:
     def __init__(self, endpoint_url: str, bucket: str) -> None:
         s3_pool_size = 150
+        # Default retry mode ('legacy') does not retry ConnectionClosedError,
+        # which we've been experiencing often
         boto_config = botocore.config.Config(max_pool_connections=s3_pool_size,
                                              request_checksum_calculation='when_required',
-                                             response_checksum_validation='when_required',)
+                                             response_checksum_validation='when_required',
+                                             retries={'max_attempts': 10, 'mode': 'standard'})
         self._s3r = boto3.resource('s3', endpoint_url=endpoint_url, config=boto_config)
         self._s3c = self._s3r.meta.client
         self._bucket = bucket
