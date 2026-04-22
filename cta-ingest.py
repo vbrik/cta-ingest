@@ -169,7 +169,7 @@ def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -
 
     my_delivered = set(my_state).intersection(target)
     my_orphaned = set(my_state) - set(origin)
-    my_unprocessed = set(origin) - set(my_state) - set(target) - set(my_delivered)
+    my_unprocessed = set(origin) - set(my_state) - set(target)
 
     if dry_run:
         logging.info(f'Dry run: would have cleaned-up delivered {my_delivered}')
@@ -180,7 +180,9 @@ def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -
     stats = []
     for filename in my_delivered.union(my_orphaned):
         logging.debug(f'{my_name} cleaning up {Path(work_dir, filename)}')
-        _rmdir_recursive(Path(work_dir, filename))
+        chunk_dir = Path(work_dir, filename)
+        if chunk_dir.exists():
+            _rmdir_recursive(chunk_dir)
         my_state.pop(filename)
         s3w.put_as_json(my_state, my_state_key)
         stats.append(filename)
@@ -358,6 +360,7 @@ def upload(s3w: S3Wrapper, dry_run: bool) -> None:
             s3w.delete_object(key)
         my_state.pop(filename)
         s3w.put_as_json(my_state, my_state_key)
+        stats.append(filename)
     if stats:
         logging.info(f'{my_name} cleaned-up: {len(stats)} files')
 
