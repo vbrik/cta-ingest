@@ -178,7 +178,7 @@ def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -
         return
 
     stats = []
-    for filename in my_delivered:
+    for filename in my_delivered.union(my_orphaned):
         logging.debug(f'{my_name} cleaning up {Path(work_dir, filename)}')
         _rmdir_recursive(Path(work_dir, filename))
         my_state.pop(filename)

@@ -1,3 +1,8 @@
+# Files at origin must exist until they reach the destination
+We ought to define what should happen if "in-flight" file is deleted at the origin.
+Currently, this situation handles ungracefully:
+Cta-ingest either errors out, or files get stuck in-flight, even if they could be delivered.
+
 # In Popen pipelines, failure of the first commands in not detected
 
 # Incomplete multipart uploads not cleaned-up
