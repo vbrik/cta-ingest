@@ -168,8 +168,8 @@ def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -
     target = s3w.get_from_json('target.json')
 
     my_delivered = set(my_state).intersection(target)
-    my_unprocessed = set(origin) - set(my_state) - set(target) - set(my_delivered)
     my_orphaned = set(my_state) - set(origin)
+    my_unprocessed = set(origin) - set(my_state) - set(target) - set(my_delivered)
 
     if dry_run:
         logging.info(f'Dry run: would have cleaned-up delivered {my_delivered}')
@@ -209,18 +209,21 @@ def download(s3w: S3Wrapper, work_dir: Path, dry_run: bool) -> None:
     my_state_key = 'download.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     src_state = s3w.get_from_json('upload.json', default={})
+    origin = s3w.get_from_json('origin.json', default={})
     target = s3w.get_from_json('target.json')
 
     my_delivered = set(my_state).intersection(target)
-    my_unprocessed = set(src_state) - set(target)
+    my_orphaned = set(my_state) - set(origin)
+    my_unprocessed = set(src_state) - set(target) - my_orphaned
 
     if dry_run:
-        logging.info(f'Dry run: would have cleaned-up {my_delivered}')
+        logging.info(f'Dry run: would have cleaned-up delivered {my_delivered}')
+        logging.info(f'Dry run: would have cleaned-up orphaned {my_orphaned}')
         logging.info(f'Dry run: would have downloaded {my_unprocessed}')
         return
 
     stats = []
-    for filename in my_delivered:
+    for filename in my_delivered.union(my_orphaned):
         logging.debug(f'{my_name} cleaning up {Path(work_dir, filename)}')
         _rmdir_recursive(Path(work_dir, filename))
         my_state.pop(filename)
@@ -330,23 +333,26 @@ def upload(s3w: S3Wrapper, dry_run: bool) -> None:
     my_state_key = 'upload.json'
     my_state = s3w.get_from_json(my_state_key, default={})
     src_state = s3w.get_from_json('disassemble.json', default={})
+    origin = s3w.get_from_json('origin.json', default={})
     target = s3w.get_from_json('target.json')
 
     my_delivered = set(my_state).intersection(target)
-    my_unprocessed = set(src_state) - my_delivered - set(target)
+    my_orphaned = set(my_state) - set(origin)
+    my_unprocessed = set(src_state) - my_delivered - set(target) - my_orphaned
     uploaded_parts = set(s3w.list_keys(prefix='parts'))
     partially_uploaded = {filename for filename,parts in my_state.items()
                             if uploaded_parts.intersection(parts)}
     unuploaded = my_unprocessed - partially_uploaded
 
     if dry_run:
-        logging.info(f'Dry run: would have cleaned-up {my_delivered}')
+        logging.info(f'Dry run: would have cleaned-up delivered {my_delivered}')
+        logging.info(f'Dry run: would have cleaned-up orphaned {my_orphaned}')
         logging.info(f'Dry run: would have started uploading {unuploaded}')
         logging.info(f'Dry run: would have resumed uploading {partially_uploaded}')
         return
 
     stats = []
-    for filename in my_delivered:
+    for filename in my_delivered.union(my_orphaned):
         for key in my_state[filename]:
             logging.debug(f'Cleaning up {key}')
             s3w.delete_object(key)
