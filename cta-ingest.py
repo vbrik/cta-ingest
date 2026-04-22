@@ -169,9 +169,11 @@ def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -
 
     my_delivered = set(my_state).intersection(target)
     my_unprocessed = set(origin) - set(my_state) - set(target) - set(my_delivered)
+    my_orphaned = set(my_state) - set(origin)
 
     if dry_run:
-        logging.info(f'Dry run: would have cleaned-up {my_delivered}')
+        logging.info(f'Dry run: would have cleaned-up delivered {my_delivered}')
+        logging.info(f'Dry run: would have cleaned-up orphaned {my_orphaned}')
         logging.info(f'Dry run: would have processed {my_unprocessed}')
         return
 

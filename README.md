@@ -21,6 +21,13 @@ Coordination among stages is implemented using json files the S3 bucket.
 
 Run the application with the `--help` flag for more information.
 
+## Operational notes and quirks
+* Files must remain in the origin directory until they completely clear the pipeline
+(i.e. are delivered to their target/final destination directory).
+This is a historical artifact.
+  * If a file is removed from origin before reaching the target, `cta-ingest` behavior is undefined.
+* `cta-ingest` doesn't overwrite, update, delete, etc. files in the final destination directory.
+
 # Installation
 CTA Ingest requires Python3 and [zstd](https://facebook.github.io/zstd/) (e.g. `yum install -y zstd`).
 
