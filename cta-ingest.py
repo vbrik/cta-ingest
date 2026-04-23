@@ -302,14 +302,19 @@ def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path, dry_run: bool) -> 
         logging.info(f'{my_name} processed: {len(stats)} files')
 
 
-def refresh_terminus(s3w: S3Wrapper, root_dir: Path, excludes: list[str], my_state_key: str) -> None:
+def refresh_terminus(s3w: S3Wrapper, root_dir: Path, excludes: list[str],
+                     my_state_key: str, *, verbose: bool) -> None:
     root_dir = root_dir.resolve()
+    old_state = s3w.get_from_json(my_state_key, default={})
     state = {}
     relevant_files = [fp for fp in root_dir.iterdir()
                 if fp.is_file() and not sum(fp.name.startswith(pref) for pref in excludes)]
     for fp in relevant_files:
+        filename = str(fp.relative_to(root_dir))
+        if not verbose and filename not in old_state:
+            logging.info(f"Discovered new file {filename} in {root_dir}")
         # noinspection SpellCheckingInspection
-        state[str(fp.relative_to(root_dir))] = {
+        state[filename] = {
                 'path': str(fp.resolve()),
                 'size':fp.stat().st_size,
                 'mtime':fp.stat().st_mtime,
@@ -482,9 +487,9 @@ def main() -> int:
     if args.command == 'status':
         show_status(s3w)
     elif args.command == 'refresh_origin':
-        refresh_terminus(s3w, args.path, args.excludes, 'origin.json')
+        refresh_terminus(s3w, args.path, args.excludes, 'origin.json', verbose = True)
     elif args.command == 'refresh_target':
-        refresh_terminus(s3w, args.path, ['.*'], 'target.json')
+        refresh_terminus(s3w, args.path, ['.*'], 'target.json', verbose = False)
     elif args.command == 'disassemble':
         disassemble(s3w, args.path, int(args.part_size_gb * 2**30), args.dry_run)
     elif args.command == 'upload':
