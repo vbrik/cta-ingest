@@ -91,15 +91,16 @@ class S3Wrapper:
     def download_file(self, key: str, path: str) -> None:
         self._s3c.download_file(self._bucket, key, path)
 
-    def upload_file(self, path: str, key: str) -> None:
+    def upload_file(self, path: str, key: str, progress: bool = False) -> None:
         label = "..." + path[-17:]
         size = Path(path).stat().st_size
+        callback = ProgressMeter(label, size, self._progress_interval) if progress else None
         self._s3c.upload_file(
             path,
             self._bucket,
             key,
             Config=self._tx_config,
-            Callback=ProgressMeter(label, size, self._progress_interval),
+            Callback=callback,
         )
 
     def delete_object(self, key: str) -> None:
@@ -371,7 +372,7 @@ def show_status(s3w: S3Wrapper) -> None:
     print("Mismatched:", mismatched)
 
 
-def upload(s3w: S3Wrapper, dry_run: bool) -> None:
+def upload(s3w: S3Wrapper, dry_run: bool, progress: bool = False) -> None:
     my_state_key = "upload.json"
     my_state = s3w.get_from_json(my_state_key, default={})
     src_state = s3w.get_from_json("disassemble.json", default={})
@@ -439,7 +440,7 @@ def upload(s3w: S3Wrapper, dry_run: bool) -> None:
 
             logging.info(f"Uploading {part_path} as {part_obj_key}")
             time_start = time()
-            s3w.upload_file(part_path, part_obj_key)
+            s3w.upload_file(part_path, part_obj_key, progress=progress)
             upload_duration = time() - time_start
             file_size = Path(part_path).stat().st_size
             upload_rate = file_size / upload_duration
@@ -486,7 +487,6 @@ def main() -> int:
     parser.add_argument(
         "--log-file", metavar="PATH", help="write verbose log to file (unattended mode)"
     )
-
     subparsers = parser.add_subparsers(
         title="commands",
         dest="command",
@@ -554,6 +554,9 @@ def main() -> int:
     )
     par_upload.add_argument(
         "--dry-run", default=False, action="store_true", help="dry run"
+    )
+    par_upload.add_argument(
+        "--progress", default=False, action="store_true", help="show upload progress"
     )
 
     par_download = subparsers.add_parser(
@@ -657,11 +660,11 @@ def main() -> int:
     elif args.command == "upload":
         if args.timeout:
             signal.alarm(args.timeout)
-        max_attempts = 5
+        max_attempts = 7
         for attempt in range(1, max_attempts + 1):
             # this is crude, but it avoids ugly reconnect logic in several functions
             try:
-                upload(s3w, args.dry_run)
+                upload(s3w, args.dry_run, progress=args.progress)
                 break
             except botocore.exceptions.ConnectionClosedError:
                 s3w = S3Wrapper(args.s3_url, args.bucket)
