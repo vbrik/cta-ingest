@@ -18,6 +18,12 @@ import boto3
 import botocore
 from boto3.s3.transfer import TransferConfig
 
+from botocore.exceptions import (
+    ConnectionError as BotoCoreConnectionError,
+    HTTPClientError,
+    IncompleteReadError,
+)
+
 NOTICE = 25
 logging.addLevelName(NOTICE, "NOTICE")
 
@@ -94,7 +100,9 @@ class S3Wrapper:
     def upload_file(self, path: str, key: str, progress: bool = False) -> None:
         label = "..." + path[-17:]
         size = Path(path).stat().st_size
-        callback = ProgressMeter(label, size, self._progress_interval) if progress else None
+        callback = (
+            ProgressMeter(label, size, self._progress_interval) if progress else None
+        )
         self._s3c.upload_file(
             path,
             self._bucket,
@@ -660,25 +668,26 @@ def main() -> int:
     elif args.command == "upload":
         if args.timeout:
             signal.alarm(args.timeout)
+        # The upload stage is invoked from cron once a day on a very flaky network.
+        # We must retry or a network glitch will cost us entire day's worth of uploads.
+        # This is crude, but it avoids ugly reconnect logic in several functions.
         max_attempts = 7
         for attempt in range(1, max_attempts + 1):
-            # this is crude, but it avoids ugly reconnect logic in several functions
             try:
+                if s3w is None:
+                    s3w = S3Wrapper(args.s3_url, args.bucket)
                 upload(s3w, args.dry_run, progress=args.progress)
                 break
-            except botocore.exceptions.ConnectionClosedError:
-                s3w = S3Wrapper(args.s3_url, args.bucket)
+            # The following exceptions and their subclasses should cover all problems
+            # resulting from transient network link problems (so retrying makes sense)
+            except (BotoCoreConnectionError, HTTPClientError, IncompleteReadError):
+                s3w = None
+                if attempt == max_attempts:
+                    logging.exception("Failed to connect to S3 server")
+                    return 1
                 delay = 2**attempt
-                logging.warning(
-                    "Reconnect %d/%d in %ds",
-                    attempt,
-                    max_attempts,
-                    delay,
-                )
+                logging.warning(f"Reconnecting {attempt}/{max_attempts} in {delay}s")
                 sleep(delay)
-        else:
-            logging.error("Failed to connect to S3 server")
-            return 1
     elif args.command == "download":
         download(s3w, args.path, args.dry_run)
     elif args.command == "reassemble":
