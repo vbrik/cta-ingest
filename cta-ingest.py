@@ -11,7 +11,7 @@ from argparse import ArgumentDefaultsHelpFormatter
 from functools import partial
 from pathlib import Path
 from subprocess import PIPE, Popen
-from time import time
+from time import sleep, time
 from typing import Any
 
 import boto3
@@ -657,7 +657,25 @@ def main() -> int:
     elif args.command == "upload":
         if args.timeout:
             signal.alarm(args.timeout)
-        upload(s3w, args.dry_run)
+        max_attempts = 5
+        for attempt in range(1, max_attempts + 1):
+            # this is crude, but it avoids ugly reconnect logic in several functions
+            try:
+                upload(s3w, args.dry_run)
+                break
+            except botocore.exceptions.ConnectionClosedError:
+                s3w = S3Wrapper(args.s3_url, args.bucket)
+                delay = 2**attempt
+                logging.warning(
+                    "Reconnect %d/%d in %ds",
+                    attempt,
+                    max_attempts,
+                    delay,
+                )
+                sleep(delay)
+        else:
+            logging.error("Failed to connect to S3 server")
+            return 1
     elif args.command == "download":
         download(s3w, args.path, args.dry_run)
     elif args.command == "reassemble":
