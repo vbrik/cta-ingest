@@ -27,6 +27,20 @@ from botocore.exceptions import (
 NOTICE = 25
 logging.addLevelName(NOTICE, "NOTICE")
 
+TOTAL_BYTES_TRANSFERRED = 0
+ALL_TRANSFERRED_FILES = {}
+
+
+def sigalarm_handler(signum, frame):
+    # make linter happy since we don't need these
+    type(signum)
+    type(frame)
+    logging.info("SIGALRM received")
+    notice("Ran out of time. Terminating.")
+    notice(f"Bytes transferred: {Readable.size(TOTAL_BYTES_TRANSFERRED)}")
+    notice(f"Files (possibly partially) transferred: {len(ALL_TRANSFERRED_FILES)}")
+    os._exit(2)
+
 
 def notice(msg, *args, **kwargs):
     logging.log(NOTICE, msg, *args, **kwargs)
@@ -666,7 +680,8 @@ def main() -> int:
     elif args.command == "disassemble":
         disassemble(s3w, args.path, int(args.part_size_gb * 2**30), args.dry_run)
     elif args.command == "upload":
-        if args.timeout:
+        if args.timeout is not None:
+            signal.signal(signal.SIGALRM, sigalarm_handler)
             signal.alarm(args.timeout)
         # The upload stage is invoked from cron once a day on a very flaky network.
         # We must retry or a network glitch will cost us entire day's worth of uploads.
