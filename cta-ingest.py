@@ -18,6 +18,13 @@ import boto3
 import botocore
 from boto3.s3.transfer import TransferConfig
 
+NOTICE = 25
+logging.addLevelName(NOTICE, "NOTICE")
+
+
+def notice(msg, *args, **kwargs):
+    logging.log(NOTICE, msg, *args, **kwargs)
+
 
 def _func_name() -> str:
     return inspect.stack()[1][3]  # caller function name
@@ -450,13 +457,21 @@ def main() -> int:
     )
 
     parser.add_argument(
-        "--debug", action="store_true", default=False, help="Enable debug logging"
+        "--log-level",
+        metavar="LEVEL",
+        default="INFO",
+        choices=["DEBUG", "INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL"],
+        help="application log level",
     )
     parser.add_argument(
-        "--boto-debug",
-        action="store_true",
-        default=False,
-        help="Enable debug logging for boto3/botocore/s3transfer",
+        "--boto-log-level",
+        metavar="LEVEL",
+        default="WARNING",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="log level for boto3/botocore/s3transfer",
+    )
+    parser.add_argument(
+        "--log-file", metavar="PATH", help="write verbose log to file (unattended mode)"
     )
 
     subparsers = parser.add_subparsers(
@@ -587,11 +602,23 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=(logging.DEBUG if args.debug else logging.INFO),
-        format="%(asctime)-23s %(levelname)s %(message)s",
-    )
-    boto_level = logging.DEBUG if args.boto_debug else logging.WARNING
+    verbose_level = logging.getLevelName(args.log_level)
+    fmt = logging.Formatter("%(asctime)-23s %(levelname)s %(message)s")
+
+    if args.log_file:
+        fh = logging.FileHandler(args.log_file)
+        fh.setLevel(verbose_level)
+        fh.setFormatter(fmt)
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setLevel(NOTICE)
+        sh.setFormatter(fmt)
+        logging.basicConfig(level=verbose_level, handlers=[fh, sh])
+    else:
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setLevel(verbose_level)
+        sh.setFormatter(fmt)
+        logging.basicConfig(level=verbose_level, handlers=[sh])
+    boto_level = logging.getLevelName(args.boto_log_level)
     for _lib in ("boto3", "botocore", "s3transfer", "urllib3"):
         logging.getLogger(_lib).setLevel(boto_level)
 
