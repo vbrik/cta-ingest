@@ -457,13 +457,18 @@ def main() -> int:
     )
 
     parser.add_argument(
-        "--debug", action="store_true", default=False, help="Enable debug logging"
+        "--log-level",
+        metavar="LEVEL",
+        default="INFO",
+        choices=["DEBUG", "INFO", "NOTICE", "WARNING", "ERROR", "CRITICAL"],
+        help="application log level",
     )
     parser.add_argument(
-        "--boto-debug",
-        action="store_true",
-        default=False,
-        help="Enable debug logging for boto3/botocore/s3transfer",
+        "--boto-log-level",
+        metavar="LEVEL",
+        default="WARNING",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="log level for boto3/botocore/s3transfer",
     )
     parser.add_argument(
         "--log-file", metavar="PATH", help="write verbose log to file (unattended mode)"
@@ -597,7 +602,7 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    verbose_level = logging.DEBUG if args.debug else logging.INFO
+    verbose_level = logging.getLevelName(args.log_level)
     fmt = logging.Formatter("%(asctime)-23s %(levelname)s %(message)s")
 
     if args.log_file:
@@ -613,7 +618,7 @@ def main() -> int:
         sh.setLevel(verbose_level)
         sh.setFormatter(fmt)
         logging.basicConfig(level=verbose_level, handlers=[sh])
-    boto_level = logging.DEBUG if args.boto_debug else logging.WARNING
+    boto_level = logging.getLevelName(args.boto_log_level)
     for _lib in ("boto3", "botocore", "s3transfer", "urllib3"):
         logging.getLogger(_lib).setLevel(boto_level)
 
