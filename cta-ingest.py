@@ -277,7 +277,6 @@ def download(s3w: S3Wrapper, work_dir: Path, dry_run: bool) -> None:
 
 
 def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path, dry_run: bool) -> None:
-    my_name = _func_name()
     work_dir.mkdir(parents=True, exist_ok=True)
     dst_dir.mkdir(parents=True, exist_ok=True)
     src_state = s3w.get_from_json("download.json", default={})
@@ -325,7 +324,7 @@ def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path, dry_run: bool) -> 
             continue
         else:
             output_path.rename(target_path)
-            notice(f"{target_path} arrived at its final destination")
+            notice(f"Transfer complete: {target_path}")
 
 
 def refresh_terminus(

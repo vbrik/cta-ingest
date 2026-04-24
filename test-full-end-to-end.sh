@@ -21,7 +21,7 @@ section ./cta-ingest.py -b cta-dev refresh_target $root/target
     tree --noreport $root/target
     mc cat rgw/cta-dev/target.json | jq
 
-section ./cta-ingest.py -b cta-dev disassemble $root/disassemble/
+section ./cta-ingest.py -b cta-dev disassemble --part-size-gb 0.01 $root/disassemble/
     tree --noreport $root/disassemble
     mc cat rgw/cta-dev/disassemble.json | jq
 section ./cta-ingest.py -b cta-dev upload
