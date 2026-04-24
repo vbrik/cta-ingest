@@ -63,6 +63,22 @@ def test_download_cleanup_delivered(s3w, work_dir):
     assert delivered not in s3w.get_from_json("download.json", default={})
 
 
+def test_download_cleanup_orphan(s3w, work_dir):
+    # A file in download.json but absent from origin.json is an orphan; its
+    # local chunk directory should be deleted and the entry removed from state.
+    orphan = "orphan.fits"
+    chunk_dir = work_dir / orphan
+    chunk_dir.mkdir()
+    (chunk_dir / "aa").write_bytes(b"x")
+    s3w.put_as_json({orphan: [str(chunk_dir / "aa")]}, "download.json")
+    s3w.put_as_json({}, "upload.json")
+    s3w.put_as_json({}, "origin.json")
+    s3w.put_as_json({}, "target.json")
+    cta_ingest.download(s3w, work_dir, dry_run=False)
+    assert not chunk_dir.exists()
+    assert orphan not in s3w.get_from_json("download.json", default={})
+
+
 def test_download_idempotent_and_resumes(s3w, work_dir):
     """Pre-existing parts must not be overwritten; missing parts must be fetched."""
     upload_state, content_map = upload_fake_parts(s3w, "file.fits", num_parts=2)
@@ -74,6 +90,7 @@ def test_download_idempotent_and_resumes(s3w, work_dir):
     Path(first_path).write_bytes(b"preexisting")
     s3w.put_as_json({"file.fits": [first_path]}, "download.json")
     s3w.put_as_json(upload_state, "upload.json")
+    s3w.put_as_json({"file.fits": {}}, "origin.json")
     s3w.put_as_json({}, "target.json")
 
     cta_ingest.download(s3w, work_dir, dry_run=False)

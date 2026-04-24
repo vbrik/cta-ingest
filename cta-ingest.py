@@ -105,8 +105,36 @@ class S3Wrapper:
     def delete_object(self, key: str) -> None:
         self._s3c.delete_object(Bucket=self._bucket, Key=key)
 
-    def list_keys(self, prefix: str = "") -> list[str]:
+    def list_object_keys(self, prefix: str = "") -> list[str]:
         return [obj.key for obj in self._s3b.objects.filter(Prefix=prefix)]
+
+
+class Readable:
+    @staticmethod
+    def size(size: float) -> str:
+        if size < 10**3:
+            return "%s B" % int(size)
+        elif size < 10**6:
+            return "%.2f KiB" % (size / 10**3)
+        elif size < 10**9:
+            return "%.2f MiB" % (size / 10**6)
+        elif size < 10**12:
+            return "%.2f GiB" % (size / 10**9)
+        else:
+            return "%.2f TiB" % (size / 10**12)
+
+    @staticmethod
+    def time(time_: float) -> str:
+        time_ = int(round(time_))
+        seconds = time_ % 60
+        minutes = (time_ // 60) % 60
+        hours = time_ // (60 * 60)
+        if hours:
+            return f"{hours}h {minutes}m {seconds}s"
+        elif minutes:
+            return f"{minutes}m {seconds}s"
+        else:
+            return f"{seconds}s"
 
 
 class ProgressMeter(object):
@@ -122,32 +150,6 @@ class ProgressMeter(object):
         self._last_update_count: int | None = None
         self._lock = threading.Lock()
 
-    @staticmethod
-    def __readable_size(size: float) -> str:
-        if size < 10**3:
-            return "%s B" % int(size)
-        elif size < 10**6:
-            return "%.2f KiB" % (size / 10**3)
-        elif size < 10**9:
-            return "%.2f MiB" % (size / 10**6)
-        elif size < 10**12:
-            return "%.2f GiB" % (size / 10**9)
-        else:
-            return "%.2f TiB" % (size / 10**12)
-
-    @staticmethod
-    def __readable_time(time_: float) -> str:
-        time_ = int(round(time_))
-        seconds = time_ % 60
-        minutes = (time_ // 60) % 60
-        hours = time_ // (60 * 60)
-        if hours:
-            return f"{hours}h {minutes}m {seconds}s"
-        elif minutes:
-            return f"{minutes}m {seconds}s"
-        else:
-            return f"{seconds}s"
-
     def __call__(self, num_bytes: int) -> None:
         with self._lock:
             now = time()
@@ -161,8 +163,8 @@ class ProgressMeter(object):
             t_observed = now - self._first_time
             t_since_update = now - self._last_update_time
 
-            rs = partial(self.__readable_size)
-            rt = partial(self.__readable_time)
+            rs = partial(Readable.size)
+            rt = partial(Readable.time)
             if self._count == self._size:
                 sys.stdout.write(
                     f"{self._label} {rs(self._size)} in ~{rt(t_observed)}\n"
@@ -205,9 +207,10 @@ def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -
         logging.info(f"Dry run: would have processed {my_unprocessed}")
         return
 
+    # clean up processed data
     stats = []
     for filename in my_delivered.union(my_orphaned):
-        logging.debug(f"{my_name} cleaning up {Path(work_dir, filename)}")
+        logging.info(f"{my_name} cleaning up {Path(work_dir, filename)}")
         chunk_dir = Path(work_dir, filename)
         if chunk_dir.exists():
             _rmdir_recursive(chunk_dir)
@@ -217,22 +220,19 @@ def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -
     if stats:
         logging.info(f"{my_name} cleaned-up: {len(stats)} files")
 
-    stats = []
+    # do the disassembly
     for filename in my_unprocessed:
-        logging.debug(f"{my_name} compressing and splitting {filename}")
+        logging.info(f"{my_name} compressing and splitting {filename}")
         chunk_dir = Path(work_dir, filename)
         if chunk_dir.exists():
             _rmdir_recursive(chunk_dir)
         chunk_dir.mkdir(parents=True)
-        # Compressing with --threads=0 seems to use 30-75% of CPU
+        # Compressing with --threads=0 seems to use 4 cores
         zstd_cmd = ["zstd", "--threads=0", "--stdout", origin[filename]["path"]]
         split_cmd = ["split", "-b", str(part_size), "-", str(chunk_dir) + "/"]
         _run_pipeline(["nice", "-n", "19"] + zstd_cmd, split_cmd)
         my_state[filename] = [str(f) for f in chunk_dir.iterdir()]
         s3w.put_as_json(my_state, my_state_key)
-        stats.append(filename)
-    if stats:
-        logging.info(f"{my_name} processed: {len(stats)} files")
 
 
 def download(s3w: S3Wrapper, work_dir: Path, dry_run: bool) -> None:
@@ -253,24 +253,19 @@ def download(s3w: S3Wrapper, work_dir: Path, dry_run: bool) -> None:
         logging.info(f"Dry run: would have downloaded {my_unprocessed}")
         return
 
-    stats = []
     for filename in my_delivered.union(my_orphaned):
-        logging.debug(f"{my_name} cleaning up {Path(work_dir, filename)}")
+        logging.info(f"{my_name} cleaning up {Path(work_dir, filename)}")
         _rmdir_recursive(Path(work_dir, filename))
         my_state.pop(filename)
         s3w.put_as_json(my_state, my_state_key)
-        stats.append(filename)
-    if stats:
-        logging.info(f"{my_name} cleaned-up: {len(stats)} files")
 
-    stats = []
     for origin_path in my_unprocessed:
         part_keys = src_state[origin_path]
         my_state.setdefault(origin_path, [])
         chunks_dir = work_dir / Path(origin_path)
         chunks_dir.mkdir(parents=True, exist_ok=True)
         for part_key in part_keys:
-            logging.debug(f"Downloading {origin_path} {part_key}")
+            logging.info(f"Downloading {origin_path} {part_key}")
             dst_path = str(chunks_dir / Path(part_key).name)
             if dst_path in my_state[origin_path]:
                 logging.warning(f"{part_key} already downloaded at {dst_path}")
@@ -279,9 +274,6 @@ def download(s3w: S3Wrapper, work_dir: Path, dry_run: bool) -> None:
                 s3w.download_file(part_key, dst_path)
                 my_state[origin_path].append(dst_path)
                 s3w.put_as_json(my_state, my_state_key)
-                stats.append(origin_path)
-    if stats:
-        logging.info(f"{my_name} processed: {len(stats)} files")
 
 
 def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path, dry_run: bool) -> None:
@@ -291,18 +283,17 @@ def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path, dry_run: bool) -> 
     src_state = s3w.get_from_json("download.json", default={})
     origin_state = s3w.get_from_json("origin.json")
 
-    stats = []
     for origin_path, part_paths in src_state.items():
-        logging.debug(f"Processing {origin_path} from {len(part_paths)} parts")
+        logging.info(f"Processing {origin_path} from {len(part_paths)} parts")
         if not part_paths:
-            logging.warning(f"Skipping {origin_path} because no parts are available")
+            logging.info(f"Skipping {origin_path} because no parts are available")
             continue
         output_path = Path(work_dir, Path(origin_path).name)
         target_path = dst_dir / output_path.name
         # We never want to overwrite, so early short-circuit to not do unnecessary work
         # (target path may exist because it was transferred out-of-band).
         if target_path.exists():
-            logging.error(f"{target_path} exists")
+            notice(f"{target_path} already exists; skipping")
             continue
         if dry_run:
             logging.info(f"Skipping {part_paths} due to dry run")
@@ -322,6 +313,7 @@ def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path, dry_run: bool) -> 
         except Exception as e:
             logging.warning(f"Failed to reassemble {origin_path}")
             logging.warning(f"{e}")
+            notice(f"File {origin_path} doesn't appear to be fully uploaded yet")
             continue
         origin_file = origin_state[origin_path]
         # noinspection SpellCheckingInspection
@@ -333,10 +325,7 @@ def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path, dry_run: bool) -> 
             continue
         else:
             output_path.rename(target_path)
-            logging.debug(f"{target_path} arrived at its final destination")
-            stats.append(output_path.name)
-    if stats:
-        logging.info(f"{my_name} processed: {len(stats)} files")
+            notice(f"{target_path} arrived at its final destination")
 
 
 def refresh_terminus(
@@ -344,21 +333,20 @@ def refresh_terminus(
     root_dir: Path,
     excludes: list[str],
     my_state_key: str,
-    *,
-    verbose: bool,
+    verbose: bool = True,
 ) -> None:
     root_dir = root_dir.resolve()
     old_state = s3w.get_from_json(my_state_key, default={})
     state = {}
     relevant_files = [
-        fp
-        for fp in root_dir.iterdir()
-        if fp.is_file() and not sum(fp.name.startswith(pref) for pref in excludes)
+        path
+        for path in root_dir.iterdir()
+        if path.is_file() and not sum(path.name.startswith(pref) for pref in excludes)
     ]
     for fp in relevant_files:
         filename = str(fp.relative_to(root_dir))
-        if not verbose and filename not in old_state:
-            logging.info(f"Discovered new file {filename} in {root_dir}")
+        if verbose and filename not in old_state:
+            notice(f"Discovered new file {filename} in {root_dir}")
         # noinspection SpellCheckingInspection
         state[filename] = {
             "path": str(fp.resolve()),
@@ -385,7 +373,6 @@ def show_status(s3w: S3Wrapper) -> None:
 
 
 def upload(s3w: S3Wrapper, dry_run: bool) -> None:
-    my_name = _func_name()
     my_state_key = "upload.json"
     my_state = s3w.get_from_json(my_state_key, default={})
     src_state = s3w.get_from_json("disassemble.json", default={})
@@ -395,13 +382,18 @@ def upload(s3w: S3Wrapper, dry_run: bool) -> None:
     my_delivered = set(my_state).intersection(target)
     my_orphaned = set(my_state) - set(origin)
     my_unprocessed = set(src_state) - my_delivered - set(target) - my_orphaned
-    uploaded_parts = set(s3w.list_keys(prefix="parts"))
+    uploaded_parts = set(s3w.list_object_keys(prefix="parts"))
     partially_uploaded = {
         filename
         for filename, parts in my_state.items()
         if uploaded_parts.intersection(parts)
     }
     unuploaded = my_unprocessed - partially_uploaded
+
+    for filename in my_orphaned:
+        logging.error(
+            f"File {filename} has been uploaded but no longer present at origin"
+        )
 
     if dry_run:
         logging.info(f"Dry run: would have cleaned-up delivered {my_delivered}")
@@ -410,36 +402,58 @@ def upload(s3w: S3Wrapper, dry_run: bool) -> None:
         logging.info(f"Dry run: would have resumed uploading {partially_uploaded}")
         return
 
+    # clean up processed objects
     stats = []
     for filename in my_delivered.union(my_orphaned):
-        for key in my_state[filename]:
-            logging.debug(f"Cleaning up {key}")
-            s3w.delete_object(key)
+        for part_obj_key in my_state[filename]:
+            is_orphan = filename in my_orphaned
+            logging.info(
+                f"Cleaning up {'orphan' if is_orphan else 'delivered'} object {part_obj_key}"
+            )
+            s3w.delete_object(part_obj_key)
         my_state.pop(filename)
         s3w.put_as_json(my_state, my_state_key)
         stats.append(filename)
     if stats:
-        logging.info(f"{my_name} cleaned-up: {len(stats)} files")
+        logging.info(f"Cleaned-up {len(stats)} part objects")
 
-    stats = []
+    # do the upload
+    stats: list[str] = []
+    total_uploaded = 0
     for filename in my_unprocessed:
         my_state.setdefault(filename, [])
         for part_path in src_state[filename]:
-            key = "parts" + part_path
-            if key in uploaded_parts:
-                logging.warning(f"Key {key} already uploaded")
-                if key not in my_state[filename]:
-                    logging.warning(f"Uploaded key {key} wasn't in {my_state_key}")
-                else:
-                    continue  # key uploaded and in my_state
-            else:
-                logging.debug(f"Uploading {part_path} as {key}")
-                s3w.upload_file(part_path, key)
-            my_state[filename].append(key)
+            part_obj_key = "parts" + part_path
+            # check sanity of already uploaded "rogue" parts
+            if part_obj_key in uploaded_parts:
+                # is this a rogue object uploaded out-of-band?
+                if part_obj_key not in my_state[filename]:
+                    logging.error(
+                        f"Uploaded object {part_obj_key} not in {my_state_key}."
+                        f" Assuming it's intended and updating my state"
+                    )
+                    # must add the rogue object to state o/w it'll never be cleaned up
+                    my_state[filename].append(part_obj_key)
+                    s3w.put_as_json(my_state, my_state_key)
+                logging.info(f"Object key {part_obj_key} already uploaded; skipping")
+                continue
+
+            logging.info(f"Uploading {part_path} as {part_obj_key}")
+            time_start = time()
+            s3w.upload_file(part_path, part_obj_key)
+            upload_duration = time() - time_start
+            file_size = Path(part_path).stat().st_size
+            upload_rate = file_size / upload_duration
+            notice(
+                f"Uploaded {filename} part {part_path} at {Readable.size(upload_rate)}/s"
+            )
+            my_state[filename].append(part_obj_key)
             s3w.put_as_json(my_state, my_state_key)
             stats.append(filename)
+            total_uploaded += file_size
+
     if stats:
-        logging.info(f"{my_name} processed: {len(stats)} files")
+        notice(f"Uploaded all {len(stats)} files, {Readable.size(total_uploaded)}")
 
 
 def main() -> int:

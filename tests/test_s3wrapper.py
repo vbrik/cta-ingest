@@ -1,5 +1,5 @@
-import pytest
 import cta_ingest
+import pytest
 
 
 def test_put_get_json_roundtrip(s3w):
@@ -47,17 +47,17 @@ def test_delete_nonexistent_is_silent(s3w):
 
 
 def test_list_keys_empty(s3w):
-    assert s3w.list_keys() == []
+    assert s3w.list_object_keys() == []
 
 
 def test_list_keys_all(s3w):
     s3w.put_as_json({}, "a.json")
     s3w.put_as_json({}, "b.json")
-    assert sorted(s3w.list_keys()) == ["a.json", "b.json"]
+    assert sorted(s3w.list_object_keys()) == ["a.json", "b.json"]
 
 
 def test_list_keys_with_prefix(s3w):
     s3w.put_as_json({}, "parts/x/aa")
     s3w.put_as_json({}, "parts/x/ab")
     s3w.put_as_json({}, "other/z")
-    assert sorted(s3w.list_keys(prefix="parts")) == ["parts/x/aa", "parts/x/ab"]
+    assert sorted(s3w.list_object_keys(prefix="parts")) == ["parts/x/aa", "parts/x/ab"]

@@ -1,10 +1,13 @@
 import os
-import pytest
 from pathlib import Path
+
 import cta_ingest
+import pytest
 
 
-def make_chunk_dir(work_dir: Path, filename: str, num_chunks: int = 2, chunk_size: int = 1000):
+def make_chunk_dir(
+    work_dir: Path, filename: str, num_chunks: int = 2, chunk_size: int = 1000
+):
     """Create real chunk files on disk and return their absolute path strings."""
     chunk_dir = work_dir / filename
     chunk_dir.mkdir(parents=True)
@@ -21,7 +24,7 @@ def test_upload_dry_run(s3w, work_dir):
     s3w.put_as_json({"file.fits": paths}, "disassemble.json")
     s3w.put_as_json({}, "target.json")
     cta_ingest.upload(s3w, dry_run=True)
-    assert s3w.list_keys(prefix="parts") == []
+    assert s3w.list_object_keys(prefix="parts") == []
     assert s3w.get_from_json("upload.json", default={}) == {}
 
 
@@ -34,7 +37,7 @@ def test_upload_uploads_parts(s3w, work_dir):
     assert "file.fits" in state
     assert len(state["file.fits"]) == 3
     assert all(k.startswith("parts") for k in state["file.fits"])
-    assert set(s3w.list_keys(prefix="parts")) == set(state["file.fits"])
+    assert set(s3w.list_object_keys(prefix="parts")) == set(state["file.fits"])
 
 
 def test_upload_key_naming(s3w, work_dir):
@@ -60,7 +63,7 @@ def test_upload_cleanup_delivered(s3w, work_dir):
     s3w.put_as_json({"delivered.fits": {"size": 1}}, "target.json")
     cta_ingest.upload(s3w, dry_run=False)
     assert "delivered.fits" not in s3w.get_from_json("upload.json", default={})
-    assert delivered_key not in s3w.list_keys()
+    assert delivered_key not in s3w.list_object_keys()
 
 
 def test_upload_resume_partial(s3w, work_dir):
@@ -72,6 +75,7 @@ def test_upload_resume_partial(s3w, work_dir):
 
     s3w.put_as_json({"file.fits": paths}, "disassemble.json")
     s3w.put_as_json({"file.fits": [first_key]}, "upload.json")
+    s3w.put_as_json({"file.fits": {"path": paths[0], "size": 3000}}, "origin.json")
     s3w.put_as_json({}, "target.json")
 
     cta_ingest.upload(s3w, dry_run=False)
@@ -81,6 +85,40 @@ def test_upload_resume_partial(s3w, work_dir):
     assert set(state["file.fits"]) == expected_keys
     body = s3w._s3c.get_object(Bucket="test-bucket", Key=first_key)["Body"].read()
     assert body == b"preexisting-body"
+
+
+def test_upload_cleanup_orphan(s3w, work_dir):
+    # A file in upload.json but absent from origin.json is an orphan; its S3
+    # objects should be deleted and the entry removed from state.
+    orphan_key = "parts/orphan_part"
+    s3w._s3c.put_object(Bucket="test-bucket", Key=orphan_key, Body=b"data")
+    s3w.put_as_json({}, "disassemble.json")
+    s3w.put_as_json({"orphan.fits": [orphan_key]}, "upload.json")
+    s3w.put_as_json({}, "origin.json")
+    s3w.put_as_json({}, "target.json")
+    cta_ingest.upload(s3w, dry_run=False)
+    assert "orphan.fits" not in s3w.get_from_json("upload.json", default={})
+    assert orphan_key not in s3w.list_object_keys()
+
+
+def test_upload_rogue_object_added_to_state(s3w, work_dir):
+    """An object already in S3 but absent from upload.json is treated as rogue:
+    it must be added to state (so it can be cleaned up later) and not re-uploaded."""
+    paths = make_chunk_dir(work_dir, "file.fits", num_chunks=2)
+    rogue_key = "parts" + paths[0]
+    s3w._s3c.put_object(Bucket="test-bucket", Key=rogue_key, Body=b"rogue-body")
+
+    s3w.put_as_json({"file.fits": paths}, "disassemble.json")
+    s3w.put_as_json({}, "upload.json")  # rogue_key intentionally absent
+    s3w.put_as_json({}, "target.json")
+
+    cta_ingest.upload(s3w, dry_run=False)
+
+    state = s3w.get_from_json("upload.json")
+    assert rogue_key in state["file.fits"]
+    # rogue object must not have been overwritten
+    body = s3w._s3c.get_object(Bucket="test-bucket", Key=rogue_key)["Body"].read()
+    assert body == b"rogue-body"
 
 
 def test_upload_missing_target_raises(s3w, work_dir):
