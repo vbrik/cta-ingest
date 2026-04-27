@@ -657,6 +657,8 @@ def main() -> int:
     verbose_level = logging.getLevelName(args.log_level)
     fmt = logging.Formatter("%(asctime)-23s %(levelname)s %(message)s")
 
+    # If we are writing to a log file, we don't want INFO messages to go
+    # to stdout (too verbose). This allows cron to send readable messages.
     if args.log_file:
         fh = logging.FileHandler(args.log_file)
         fh.setLevel(verbose_level)
@@ -671,6 +673,8 @@ def main() -> int:
         sh.setFormatter(fmt)
         logging.basicConfig(level=verbose_level, handlers=[sh])
     boto_level = logging.getLevelName(args.boto_log_level)
+
+    # boto* is super noisy, set its log level separately
     for _lib in ("boto3", "botocore", "s3transfer", "urllib3"):
         logging.getLogger(_lib).setLevel(boto_level)
 
