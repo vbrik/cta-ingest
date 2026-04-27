@@ -1,7 +1,8 @@
 # Files at origin must exist until they reach the destination
 We ought to define what should happen if "in-flight" file is deleted at the origin.
-Currently, this situation handles ungracefully:
-Cta-ingest either errors out, or files get stuck in-flight, even if they could be delivered.
+Currently, this situation is not guaranteed to be handled gracefully.
+Some stages handle "orphan" files, but, notably, reassemble needs file metadata from the origin and will not be able to deliver files that disappear from origin.
+Fixing this wouldn't be difficult, but may require pervasive changes, depending on what we decide the right approach is.
 
 # In Popen pipelines, failure of the first commands in not detected
 
