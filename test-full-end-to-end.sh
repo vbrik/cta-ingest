@@ -12,27 +12,40 @@ function section() {
     heading="$@"
     printf -- '\n%s------- %s%s\n' $(tput rev) "$heading" $(tput sgr0)
     $@
+    echo
 }
 
 section ./cta-ingest.py -b cta-dev refresh_origin $root/origin/
     tree --noreport $root/origin
     mc cat rgw/cta-dev/origin.json | jq
+    echo
+
 section ./cta-ingest.py -b cta-dev refresh_target $root/target
     tree --noreport $root/target
     mc cat rgw/cta-dev/target.json | jq
+    echo
 
 section ./cta-ingest.py -b cta-dev disassemble --part-size-gb 0.01 $root/disassemble/
     tree --noreport $root/disassemble
     mc cat rgw/cta-dev/disassemble.json | jq
-section ./cta-ingest.py -b cta-dev upload --progress --timeout 1
+    echo
+
+section ./cta-ingest.py -b cta-dev upload
     mc ls -r rgw/cta-dev/
     mc cat rgw/cta-dev/upload.json | jq
+    echo
+
 section ./cta-ingest.py -b cta-dev download $root/download
     tree --noreport $root/download
     mc cat rgw/cta-dev/download.json | jq
+    echo
+
 section ./cta-ingest.py -b cta-dev reassemble --work-dir $root/reassemble $root/target
     ls -lh $root/origin
     ls -lh $root/target
+    echo
+
 section ./cta-ingest.py -b cta-dev refresh_target $root/target
     tree --noreport $root/target
     mc cat rgw/cta-dev/target.json | jq
+    echo

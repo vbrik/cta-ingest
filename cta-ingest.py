@@ -27,23 +27,39 @@ from botocore.exceptions import (
 NOTICE = 25
 logging.addLevelName(NOTICE, "NOTICE")
 
-TOTAL_BYTES_TRANSFERRED = 0
-ALL_TRANSFERRED_FILES = {}
+UPLOAD_STATS = {"bytes": 0, "files": set(), "start_time": time()}
 
 
-def sigalarm_handler(signum, frame):
+def print_upload_summary():
+    global UPLOAD_STATS
+    run_time = time() - UPLOAD_STATS["start_time"]
+    notice(f"Upload stage ran for {Readable.time(run_time)}")
+    notice(f"Uploaded parts of {len(UPLOAD_STATS['files'])} files")
+    notice(f"Data uploaded: {Readable.size(UPLOAD_STATS['bytes'])}")
+    if run_time > 0:
+        upload_rate = UPLOAD_STATS["bytes"] / run_time
+        notice(f"Average upload rate: {Readable.size(upload_rate)}/s")
+
+
+def upload_sigalarm_handler(signum, frame):
     # make linter happy since we don't need these
     type(signum)
     type(frame)
-    logging.info("SIGALRM received")
+    logging.info("The upload stage received SIGALRM")
     notice("Ran out of time. Terminating.")
-    notice(f"Bytes transferred: {Readable.size(TOTAL_BYTES_TRANSFERRED)}")
-    notice(f"Files (possibly partially) transferred: {len(ALL_TRANSFERRED_FILES)}")
-    os._exit(2)
+    print_upload_summary()
+    sys.exit(2)
 
 
 def notice(msg, *args, **kwargs):
     logging.log(NOTICE, msg, *args, **kwargs)
+
+
+def _non_negative_int(value: str) -> int:
+    n = int(value)
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"must be non-negative integer, got {n}")
+    return n
 
 
 def _func_name() -> str:
@@ -425,7 +441,7 @@ def upload(s3w: S3Wrapper, dry_run: bool, progress: bool = False) -> None:
         return
 
     # clean up processed objects
-    stats = []
+    cleanup_count = 0
     for filename in my_delivered.union(my_orphaned):
         for part_obj_key in my_state[filename]:
             is_orphan = filename in my_orphaned
@@ -435,13 +451,10 @@ def upload(s3w: S3Wrapper, dry_run: bool, progress: bool = False) -> None:
             s3w.delete_object(part_obj_key)
         my_state.pop(filename)
         s3w.put_as_json(my_state, my_state_key)
-        stats.append(filename)
-    if stats:
-        logging.info(f"Cleaned-up {len(stats)} part objects")
+        cleanup_count += 1
+    logging.info(f"Cleaned-up {cleanup_count} part objects")
 
     # do the upload
-    stats: list[str] = []
-    total_uploaded = 0
     for filename in my_unprocessed:
         my_state.setdefault(filename, [])
         for part_path in src_state[filename]:
@@ -471,11 +484,12 @@ def upload(s3w: S3Wrapper, dry_run: bool, progress: bool = False) -> None:
             )
             my_state[filename].append(part_obj_key)
             s3w.put_as_json(my_state, my_state_key)
-            stats.append(filename)
-            total_uploaded += file_size
+            # use global stats because we may get interrupted by a signal
+            # and the handler may want to print upload statistics
+            UPLOAD_STATS["bytes"] += file_size
+            UPLOAD_STATS["files"].add(filename)
 
-    if stats:
-        notice(f"Uploaded all {len(stats)} files, {Readable.size(total_uploaded)}")
+    print_upload_summary()
 
 
 def main() -> int:
@@ -571,8 +585,8 @@ def main() -> int:
     par_upload.add_argument(
         "--timeout",
         metavar="SECONDS",
-        type=int,
-        help="terminate after this amount of time",
+        type=_non_negative_int,
+        help="terminate after this non-negative amount of time",
     )
     par_upload.add_argument(
         "--dry-run", default=False, action="store_true", help="dry run"
@@ -681,7 +695,7 @@ def main() -> int:
         disassemble(s3w, args.path, int(args.part_size_gb * 2**30), args.dry_run)
     elif args.command == "upload":
         if args.timeout is not None:
-            signal.signal(signal.SIGALRM, sigalarm_handler)
+            signal.signal(signal.SIGALRM, upload_sigalarm_handler)
             signal.alarm(args.timeout)
         # The upload stage is invoked from cron once a day on a very flaky network.
         # We must retry or a network glitch will cost us entire day's worth of uploads.
