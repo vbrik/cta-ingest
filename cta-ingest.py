@@ -235,6 +235,7 @@ def refresh_terminus(
     excludes: list[str],
     my_state_key: str,
     verbose: bool = True,
+    dry_run: bool = False,
 ) -> None:
     root_dir = root_dir.resolve()
     old_state = s3w.get_from_json(my_state_key, default={})
@@ -246,7 +247,7 @@ def refresh_terminus(
     ]
     for fp in relevant_files:
         filename = str(fp.relative_to(root_dir))
-        if verbose and filename not in old_state:
+        if (verbose or dry_run) and filename not in old_state:
             notice(f"Discovered new file {filename} in {root_dir}")
         # noinspection SpellCheckingInspection
         state[filename] = {
@@ -256,7 +257,8 @@ def refresh_terminus(
             "atime": fp.stat().st_atime,
             "ts": time(),
         }
-    s3w.put_as_json(state, my_state_key)
+    if not dry_run:
+        s3w.put_as_json(state, my_state_key)
 
 
 def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -> None:
@@ -549,6 +551,9 @@ def main() -> int:
         help="exclude files whose names start with PREF",
     )
     par_refresh_origin.add_argument(
+        "--dry-run", default=False, action="store_true", help="dry run"
+    )
+    par_refresh_origin.add_argument(
         "path", metavar="ORIGIN_PATH", type=__abs_path, help="path to monitor"
     )
 
@@ -556,6 +561,9 @@ def main() -> int:
         "refresh_target",
         formatter_class=__formatter(27),
         help="update the list of files currently in the target directory",
+    )
+    par_refresh_target.add_argument(
+        "--dry-run", default=False, action="store_true", help="dry run"
     )
     par_refresh_target.add_argument(
         "path", metavar="PATH", type=__abs_path, help="path to monitor"
@@ -694,9 +702,9 @@ def main() -> int:
     if args.command == "status":
         show_status(s3w)
     elif args.command == "refresh_origin":
-        refresh_terminus(s3w, args.path, args.excludes, "origin.json", verbose=True)
+        refresh_terminus(s3w, args.path, args.excludes, "origin.json", verbose=True, dry_run=args.dry_run)
     elif args.command == "refresh_target":
-        refresh_terminus(s3w, args.path, [".*"], "target.json", verbose=False)
+        refresh_terminus(s3w, args.path, [".*"], "target.json", verbose=False, dry_run=args.dry_run)
     elif args.command == "disassemble":
         disassemble(s3w, args.path, int(args.part_size_gb * 2**30), args.dry_run)
     elif args.command == "upload":

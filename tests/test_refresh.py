@@ -57,6 +57,21 @@ def test_refresh_ignores_subdirectories(s3w, origin_dir):
     assert list(result.keys()) == ["file.txt"]
 
 
+def test_refresh_dry_run_does_not_write_state(s3w, origin_dir):
+    (origin_dir / "file.txt").write_bytes(b"x")
+    cta_ingest.refresh_terminus(s3w, origin_dir, excludes=[], my_state_key="origin.json", dry_run=True)
+    assert s3w.get_from_json("origin.json", default=None) is None
+
+
+def test_refresh_dry_run_preserves_existing_state(s3w, origin_dir):
+    (origin_dir / "old.txt").write_bytes(b"o")
+    cta_ingest.refresh_terminus(s3w, origin_dir, excludes=[], my_state_key="origin.json")
+    (origin_dir / "new.txt").write_bytes(b"n")
+    cta_ingest.refresh_terminus(s3w, origin_dir, excludes=[], my_state_key="origin.json", dry_run=True)
+    result = s3w.get_from_json("origin.json")
+    assert set(result.keys()) == {"old.txt"}
+
+
 def test_show_status_all_delivered(s3w, capsys):
     origin = {"a.fits": {"size": 100}, "b.fits": {"size": 200}}
     target = {"a.fits": {"size": 100}, "b.fits": {"size": 200}}
