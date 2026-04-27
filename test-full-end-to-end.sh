@@ -41,7 +41,10 @@ section ./cta-ingest.py -b cta-dev download $root/download
     echo
 
 section ./cta-ingest.py -b cta-dev reassemble --work-dir $root/reassemble $root/target
+    echo Origin:
     ls -lh $root/origin
+    echo
+    echo Target:
     ls -lh $root/target
     echo
 
