@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 from argparse import ArgumentDefaultsHelpFormatter
@@ -696,6 +697,14 @@ def main() -> int:
     if args.command is None:
         parser.print_help()
         parser.exit()
+
+    if args.command != "status":
+        lock_sock = socket.socket(socket.AF_UNIX)
+        try:
+            lock_sock.bind(f'\0cta-ingest-{args.bucket}')
+        except OSError:
+            logging.error(f"Another instance is already running for bucket {args.bucket!r}")
+            return 1
 
     s3w = S3Wrapper(args.s3_url, args.bucket)
 
