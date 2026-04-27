@@ -229,143 +229,6 @@ class ProgressMeter(object):
                 self._last_update_count = self._count
 
 
-def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -> None:
-    my_name = _func_name()
-    my_state_key = "disassemble.json"
-    my_state = s3w.get_from_json(my_state_key, default={})
-    origin = s3w.get_from_json("origin.json", default={})
-    target = s3w.get_from_json("target.json")
-
-    my_delivered = set(my_state).intersection(target)
-    my_orphaned = set(my_state) - set(origin)
-    my_unprocessed = set(origin) - set(my_state) - set(target)
-
-    if dry_run:
-        logging.info(f"Dry run: would have cleaned-up delivered {my_delivered}")
-        logging.info(f"Dry run: would have cleaned-up orphaned {my_orphaned}")
-        logging.info(f"Dry run: would have processed {my_unprocessed}")
-        return
-
-    # clean up processed data
-    stats = []
-    for filename in my_delivered.union(my_orphaned):
-        logging.info(f"{my_name} cleaning up {Path(work_dir, filename)}")
-        chunk_dir = Path(work_dir, filename)
-        if chunk_dir.exists():
-            _rmdir_recursive(chunk_dir)
-        my_state.pop(filename)
-        s3w.put_as_json(my_state, my_state_key)
-        stats.append(filename)
-    if stats:
-        logging.info(f"{my_name} cleaned-up: {len(stats)} files")
-
-    # do the disassembly
-    for filename in my_unprocessed:
-        logging.info(f"{my_name} compressing and splitting {filename}")
-        chunk_dir = Path(work_dir, filename)
-        if chunk_dir.exists():
-            _rmdir_recursive(chunk_dir)
-        chunk_dir.mkdir(parents=True)
-        # Compressing with --threads=0 seems to use 4 cores
-        zstd_cmd = ["zstd", "--threads=0", "--stdout", origin[filename]["path"]]
-        split_cmd = ["split", "-b", str(part_size), "-", str(chunk_dir) + "/"]
-        _run_pipeline(["nice", "-n", "19"] + zstd_cmd, split_cmd)
-        my_state[filename] = [str(f) for f in chunk_dir.iterdir()]
-        s3w.put_as_json(my_state, my_state_key)
-
-
-def download(s3w: S3Wrapper, work_dir: Path, dry_run: bool) -> None:
-    my_name = _func_name()
-    my_state_key = "download.json"
-    my_state = s3w.get_from_json(my_state_key, default={})
-    src_state = s3w.get_from_json("upload.json", default={})
-    origin = s3w.get_from_json("origin.json", default={})
-    target = s3w.get_from_json("target.json")
-
-    my_delivered = set(my_state).intersection(target)
-    my_orphaned = set(my_state) - set(origin)
-    my_unprocessed = set(src_state) - set(target) - my_orphaned
-
-    if dry_run:
-        logging.info(f"Dry run: would have cleaned-up delivered {my_delivered}")
-        logging.info(f"Dry run: would have cleaned-up orphaned {my_orphaned}")
-        logging.info(f"Dry run: would have downloaded {my_unprocessed}")
-        return
-
-    for filename in my_delivered.union(my_orphaned):
-        logging.info(f"{my_name} cleaning up {Path(work_dir, filename)}")
-        _rmdir_recursive(Path(work_dir, filename))
-        my_state.pop(filename)
-        s3w.put_as_json(my_state, my_state_key)
-
-    for origin_path in my_unprocessed:
-        part_keys = src_state[origin_path]
-        my_state.setdefault(origin_path, [])
-        chunks_dir = work_dir / Path(origin_path)
-        chunks_dir.mkdir(parents=True, exist_ok=True)
-        for part_key in part_keys:
-            logging.info(f"Downloading {origin_path} {part_key}")
-            dst_path = str(chunks_dir / Path(part_key).name)
-            if dst_path in my_state[origin_path]:
-                logging.warning(f"{part_key} already downloaded at {dst_path}")
-                continue
-            else:
-                s3w.download_file(part_key, dst_path)
-                my_state[origin_path].append(dst_path)
-                s3w.put_as_json(my_state, my_state_key)
-
-
-def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path, dry_run: bool) -> None:
-    work_dir.mkdir(parents=True, exist_ok=True)
-    dst_dir.mkdir(parents=True, exist_ok=True)
-    src_state = s3w.get_from_json("download.json", default={})
-    origin_state = s3w.get_from_json("origin.json")
-
-    for origin_path, part_paths in src_state.items():
-        logging.info(f"Processing {origin_path} from {len(part_paths)} parts")
-        if not part_paths:
-            logging.info(f"Skipping {origin_path} because no parts are available")
-            continue
-        output_path = Path(work_dir, Path(origin_path).name)
-        target_path = dst_dir / output_path.name
-        # We never want to overwrite, so early short-circuit to not do unnecessary work
-        # (target path may exist because it was transferred out-of-band).
-        if target_path.exists():
-            notice(f"{target_path} already exists; skipping")
-            continue
-        if dry_run:
-            logging.info(f"Skipping {part_paths} due to dry run")
-            continue
-        cat_cmd = ["cat"] + sorted(part_paths)
-        # noinspection SpellCheckingInspection
-        zstd_cmd = [
-            "pzstd",
-            "--quiet",
-            "--force",
-            "--decompress",
-            "-o",
-            str(output_path),
-        ]
-        try:
-            _run_pipeline(cat_cmd, zstd_cmd)
-        except Exception as e:
-            logging.warning(f"Failed to reassemble {origin_path}")
-            logging.warning(f"{e}")
-            notice(f"File {origin_path} doesn't appear to be fully uploaded yet")
-            continue
-        origin_file = origin_state[origin_path]
-        # noinspection SpellCheckingInspection
-        os.utime(output_path, (origin_file["atime"], origin_file["mtime"]))
-        output_path.chmod(0o444)
-        # Path.rename on Linux silently overwrites, so there is a TOCTOU race here
-        if target_path.exists():
-            logging.error(f"{target_path} exists")
-            continue
-        else:
-            output_path.rename(target_path)
-            notice(f"Transfer complete: {target_path}")
-
-
 def refresh_terminus(
     s3w: S3Wrapper,
     root_dir: Path,
@@ -396,18 +259,48 @@ def refresh_terminus(
     s3w.put_as_json(state, my_state_key)
 
 
-def show_status(s3w: S3Wrapper) -> None:
-    # XXX handle missing state exceptions
+def disassemble(s3w: S3Wrapper, work_dir: Path, part_size: int, dry_run: bool) -> None:
+    my_state_key = "disassemble.json"
+    disassemble_state = s3w.get_from_json(my_state_key, default={})
+    origin = s3w.get_from_json("origin.json", default={})
     target = s3w.get_from_json("target.json")
-    origin = s3w.get_from_json("origin.json")
 
-    undelivered = [fn for fn in origin if fn not in target]
-    present = [fn for fn in origin if fn in target]
-    mismatched = [fn for fn in present if origin[fn]["size"] != target[fn]["size"]]
+    my_delivered = set(disassemble_state).intersection(target)
+    my_orphaned = set(disassemble_state) - set(origin)
+    my_unprocessed = set(origin) - set(disassemble_state) - set(target)
 
-    print("Present:", len(present))
-    print("Undelivered:", undelivered)
-    print("Mismatched:", mismatched)
+    if dry_run:
+        logging.info(f"Dry run: would have cleaned-up delivered {my_delivered}")
+        logging.info(f"Dry run: would have cleaned-up orphaned {my_orphaned}")
+        logging.info(f"Dry run: would have processed {my_unprocessed}")
+        return
+
+    # clean up processed data
+    stats = []
+    for filename in my_delivered.union(my_orphaned):
+        logging.info(f"Disassemble cleaning up {Path(work_dir, filename)}")
+        chunk_dir = Path(work_dir, filename)
+        if chunk_dir.exists():
+            _rmdir_recursive(chunk_dir)
+        disassemble_state.pop(filename)
+        s3w.put_as_json(disassemble_state, my_state_key)
+        stats.append(filename)
+    if stats:
+        logging.info(f"Disassemble cleaned-up: {len(stats)} files")
+
+    # do the disassembly
+    for filename in my_unprocessed:
+        logging.info(f"Disassemble compressing and splitting {filename}")
+        chunk_dir = Path(work_dir, filename)
+        if chunk_dir.exists():
+            _rmdir_recursive(chunk_dir)
+        chunk_dir.mkdir(parents=True)
+        # Compressing with --threads=0 seems to use 4 cores
+        zstd_cmd = ["zstd", "--threads=0", "--stdout", origin[filename]["path"]]
+        split_cmd = ["split", "-b", str(part_size), "-", str(chunk_dir) + "/"]
+        _run_pipeline(["nice", "-n", "19"] + zstd_cmd, split_cmd)
+        disassemble_state[filename] = [str(f) for f in chunk_dir.iterdir()]
+        s3w.put_as_json(disassemble_state, my_state_key)
 
 
 def upload(s3w: S3Wrapper, dry_run: bool, progress: bool = False) -> None:
@@ -490,6 +383,115 @@ def upload(s3w: S3Wrapper, dry_run: bool, progress: bool = False) -> None:
             UPLOAD_STATS["files"].add(filename)
 
     print_upload_summary()
+
+
+def download(s3w: S3Wrapper, work_dir: Path, dry_run: bool) -> None:
+    my_state_key = "download.json"
+    download_state = s3w.get_from_json(my_state_key, default={})
+    upload_state = s3w.get_from_json("upload.json", default={})
+    origin = s3w.get_from_json("origin.json", default={})
+    target = s3w.get_from_json("target.json")
+
+    my_delivered = set(download_state).intersection(target)
+    my_orphaned = set(download_state) - set(origin)
+    my_unprocessed = set(upload_state) - set(target) - my_orphaned
+
+    if dry_run:
+        logging.info(f"Dry run: would have cleaned-up delivered {my_delivered}")
+        logging.info(f"Dry run: would have cleaned-up orphaned {my_orphaned}")
+        logging.info(f"Dry run: would have downloaded {my_unprocessed}")
+        return
+
+    for filename in my_delivered.union(my_orphaned):
+        logging.info(f"Download stage cleaning up {Path(work_dir, filename)}")
+        _rmdir_recursive(Path(work_dir, filename))
+        download_state.pop(filename)
+        s3w.put_as_json(download_state, my_state_key)
+
+    for origin_path in my_unprocessed:
+        part_keys = upload_state[origin_path]
+        download_state.setdefault(origin_path, [])
+        chunks_dir = work_dir / Path(origin_path)
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+        for part_key in part_keys:
+            logging.info(f"Downloading {origin_path} {part_key}")
+            dst_path = str(chunks_dir / Path(part_key).name)
+            if dst_path in download_state[origin_path]:
+                logging.warning(f"{part_key} already downloaded at {dst_path}")
+                continue
+            else:
+                s3w.download_file(part_key, dst_path)
+                download_state[origin_path].append(dst_path)
+                s3w.put_as_json(download_state, my_state_key)
+
+
+def reassemble(s3w: S3Wrapper, work_dir: Path, dst_dir: Path, dry_run: bool) -> None:
+    work_dir.mkdir(parents=True, exist_ok=True)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    src_state = s3w.get_from_json("download.json", default={})
+    origin_state = s3w.get_from_json("origin.json")
+
+    for origin_path, part_paths in src_state.items():
+        logging.info(f"Processing {origin_path} from {len(part_paths)} parts")
+        if not part_paths:
+            logging.info(f"Skipping {origin_path} because no parts are available")
+            continue
+        output_path = Path(work_dir, Path(origin_path).name)
+        target_path = dst_dir / output_path.name
+        # We never want to overwrite, so early short-circuit to not do unnecessary work
+        # (target path may exist because it was transferred out-of-band).
+        if target_path.exists():
+            notice(f"{target_path} already exists; skipping")
+            continue
+        if dry_run:
+            logging.info(f"Skipping {part_paths} due to dry run")
+            continue
+        cat_cmd = ["cat"] + sorted(part_paths)
+        # noinspection SpellCheckingInspection
+        zstd_cmd = [
+            "pzstd",
+            "--quiet",
+            "--force",
+            "--decompress",
+            "-o",
+            str(output_path),
+        ]
+        try:
+            _run_pipeline(cat_cmd, zstd_cmd)
+        except Exception as e:
+            logging.warning(f"Failed to reassemble {origin_path}")
+            logging.warning(f"{e}")
+            notice(f"File {origin_path} doesn't appear to be fully uploaded yet")
+            continue
+        if origin_path not in origin_state:
+            logging.error(f"{origin_path} is not longer present at the origin")
+            logging.error(f"{origin_path} cannot be delivered")
+            continue
+        origin_file = origin_state[origin_path]
+        # noinspection SpellCheckingInspection
+        os.utime(output_path, (origin_file["atime"], origin_file["mtime"]))
+        output_path.chmod(0o444)
+        # Path.rename on Linux silently overwrites, so there is a TOCTOU race here
+        if target_path.exists():
+            logging.error(f"{target_path} exists")
+            continue
+        else:
+            output_path.rename(target_path)
+            notice(f"Transfer complete: {target_path}")
+
+
+def show_status(s3w: S3Wrapper) -> None:
+    # XXX handle missing state exceptions
+    target = s3w.get_from_json("target.json")
+    origin = s3w.get_from_json("origin.json")
+
+    undelivered = [fn for fn in origin if fn not in target]
+    present = [fn for fn in origin if fn in target]
+    mismatched = [fn for fn in present if origin[fn]["size"] != target[fn]["size"]]
+
+    print("Present:", len(present))
+    print("Undelivered:", undelivered)
+    print("Mismatched:", mismatched)
 
 
 def main() -> int:
