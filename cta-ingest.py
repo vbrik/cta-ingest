@@ -154,13 +154,13 @@ class Readable:
         if size < 10**3:
             return "%s B" % int(size)
         elif size < 10**6:
-            return "%.2f KiB" % (size / 10**3)
+            return "%.2f KB" % (size / 10**3)
         elif size < 10**9:
-            return "%.2f MiB" % (size / 10**6)
+            return "%.2f MB" % (size / 10**6)
         elif size < 10**12:
-            return "%.2f GiB" % (size / 10**9)
+            return "%.2f GB" % (size / 10**9)
         else:
-            return "%.2f TiB" % (size / 10**12)
+            return "%.2f TB" % (size / 10**12)
 
     @staticmethod
     def time(time_: float) -> str:
