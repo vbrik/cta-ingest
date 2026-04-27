@@ -68,6 +68,20 @@ def test_disassemble_cleanup_delivered(s3w, work_dir, origin_dir):
     assert filename not in s3w.get_from_json("disassemble.json", default={})
 
 
+def test_disassemble_cleanup_orphan(s3w, work_dir, origin_dir):
+    filename = "orphan.fits"
+    # File was previously disassembled but has since disappeared from origin
+    s3w.put_as_json({}, "origin.json")
+    s3w.put_as_json({filename: ["dummy_chunk"]}, "disassemble.json")
+    s3w.put_as_json({}, "target.json")
+    chunk_dir = work_dir / filename
+    chunk_dir.mkdir()
+    (chunk_dir / "aa").write_bytes(b"x")
+    cta_ingest.disassemble(s3w, work_dir, PART_SIZE, dry_run=False)
+    assert not chunk_dir.exists()
+    assert filename not in s3w.get_from_json("disassemble.json", default={})
+
+
 def test_disassemble_missing_target_raises(s3w, work_dir, origin_dir):
     entry = make_origin_entry(origin_dir, "f.fits")
     s3w.put_as_json({"f.fits": entry}, "origin.json")
